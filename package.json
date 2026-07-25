@@ -1,0 +1,29 @@
+{
+  "name": "irja-payments-gw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Irja payments gateway — Verifone HPP checkout + Landsbankinn reconciliation on Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "db:migrate:local": "wrangler d1 execute irja-payments --file=migrations/0001_init.sql --local",
+    "db:migrate:prod": "wrangler d1 execute irja-payments --file=migrations/0001_init.sql --remote",
+    "db:query:local": "wrangler d1 execute irja-payments --local --command",
+    "db:query:prod": "wrangler d1 execute irja-payments --remote --command",
+    "lint": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^3.99.0"
+  }
+}

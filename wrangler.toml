@@ -1,0 +1,45 @@
+#:schema node_modules/wrangler/config-schema.json
+
+name = "irja-payments-gw"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["nodejs_compat"]
+
+# ─── Environment Variables (non-secret) ──────────────────────────
+[vars]
+ENVIRONMENT = "sandbox"
+STOREFRONT_URL = "https://irja.khalipa.net"
+VERIFONE_API_BASE = "https://cst.test-gsc.vfims.com/oidc/checkout-service"
+VERIFONE_OAUTH_URL = "https://cst1.test-vam.vfims.com/oauth2/realms/root/realms/VerifoneServices/access_token"
+LANDSBANKINN_API_BASE = "https://apisandbox.landsbankinn.is/api/Acquiring/Acquiring/v1"
+LANDSBANKINN_OAUTH_URL = "https://apisandbox.landsbankinn.is/oauth2/access_token"
+
+# ─── D1 Database Binding ─────────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "irja-payments"
+database_id = "49c9374e-4a8b-455c-941c-49045825a16a"
+
+# ─── KV Namespace Binding (token + JWKS cache) ───────────────────
+[[kv_namespaces]]
+binding = "CACHE"
+id = "7438ed6e8a4943d380abf407886db2bf"
+
+# ─── Cron Trigger (daily reconciliation at 06:00 UTC) ────────────
+[triggers]
+crons = ["0 6 * * *"]
+
+# ─── Observability ───────────────────────────────────────────────
+[observability]
+enabled = true
+
+# ─── Production overrides (uncomment for go-live) ────────────────
+# [env.production]
+# name = "irja-payments-gw-prod"
+# [env.production.vars]
+# ENVIRONMENT = "production"
+# STOREFRONT_URL = "https://irja.is"
+# VERIFONE_API_BASE = "https://emea.gsc.verifone.cloud/oidc/checkout-service"
+# VERIFONE_OAUTH_URL = "https://emea.vam.verifone.cloud/oauth2/realms/root/realms/VerifoneServices/access_token"
+# LANDSBANKINN_API_BASE = "https://api.landsbankinn.is/api/Acquiring/Acquiring/v1"
+# LANDSBANKINN_OAUTH_URL = "https://api.landsbankinn.is/oauth2/access_token"
