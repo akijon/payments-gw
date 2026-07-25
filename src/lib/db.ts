@@ -17,9 +17,10 @@ export async function createOrder(db: D1Database, params: {
 }): Promise<void> {
   await db.prepare(
     `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, items_json)
-     VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)`
   ).bind(
     params.id,
+    params.orderNumber,
     params.currency,
     params.amount,
     params.customerEmail ?? null,

@@ -1,0 +1,26 @@
+#:schema node_modules/wrangler/config-schema.json
+
+name = "irja-payments-gw-test"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "test"
+STOREFRONT_URL = "https://test.example.com"
+VERIFONE_API_BASE = "https://api.test.verifone/checkout-service"
+VERIFONE_OAUTH_URL = "https://oauth.test.verifone/access_token"
+LANDSBANKINN_API_BASE = "https://api.test.landsbankinn.is/acquiring/v1"
+LANDSBANKINN_OAUTH_URL = "https://oauth.test.landsbankinn.is/access_token"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "irja-payments"
+database_id = "49c9374e-4a8b-455c-941c-49045825a16a"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "7438ed6e8a4943d380abf407886db2bf"
+
+[triggers]
+crons = ["0 6 * * *"]
