@@ -10,26 +10,35 @@ This document provides a step-by-step deployment guide for the Irja Payments Gat
 - [x] **Documentation**: Complete API token and secrets setup guides
 - [x] **Security**: JWS webhook verification, PCI SAQ A compliance
 
-## 🔧 Deployment Steps
+## 🚨 **CRITICAL SECURITY ISSUES - DEPLOYMENT BLOCKED**
 
-### 1. API Token Setup
+### 1. Price Manipulation Vulnerability 
 
-**Current Status:** ❌ Token lacks required permissions
+**Status:** ❌ **CRITICAL** - Client controls pricing  
+**Blocking:** ALL deployments (sandbox and production)  
+**Risk:** Complete financial exposure - clients can set any price
 
-**Action Required:**
-```bash
-npm run deploy:check
+**Current vulnerable code:**
+```typescript
+// src/types/api.ts - Allows client price control
+interface LineItem {
+  unit_price: number;   // ❌ Client-supplied, trusted completely
+  total_amount: number; // ❌ Client-supplied, trusted completely  
+}
+
+// src/routes/checkout.ts - "Server-side" calculation trusts client data
+const totalAmount = body.items.reduce((sum, item) => {
+  return sum + (item.total_amount ?? item.unit_price * item.quantity);
+}, 0);
 ```
 
-Follow the output instructions to create a new API token with:
-- Account:Read, User:Read, User→Memberships:Read
-- Workers Scripts:Edit/Read, Cloudflare Workers:Edit
-- D1:Edit/Read, Workers KV Storage:Edit/Read
+**Required Fix:**
+1. Implement server-side product catalog with authoritative prices
+2. Client sends only: `product_id`, `quantity` 
+3. Server looks up prices from catalog: `price = catalog.getPrice(product_id)`
+4. Server computes total: `amount += price * quantity`
 
-**Verification:**
-```bash
-npm run deploy:check  # Should show all green checkmarks
-```
+**DO NOT DEPLOY** until this is fixed.
 
 ### 2. Secrets Configuration
 
