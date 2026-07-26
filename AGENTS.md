@@ -24,7 +24,7 @@ Cron (06:00 UTC) → Worker /scheduled → Landsbankinn Acquiring API → D1 (se
 ### Key design decisions
 
 - **No card data ever enters this system.** Verifone HPP owns the card capture form. The Worker only sees transaction IDs and metadata. This keeps PCI scope at SAQ A.
-- **Server-side amount validation.** The checkout amount is calculated from line items in the Worker and stored in D1. The client never sends a total — the Worker computes it.
+- **Server-side amount computation.** The checkout amount is calculated from client-supplied line items in the Worker. **WARNING: Current implementation trusts client-supplied prices - this creates a critical security vulnerability. Production deployment requires a server-side product catalog with authoritative pricing.**
 - **Verify, don't trust.** Both the redirect return and webhook are verified server-to-server against the Verifone API before order status changes. The `transaction_id` from the redirect must match the checkout's `transaction_id`.
 - **Idempotent webhooks.** A `processed_webhooks` table deduplicates by `verifone_event_id`. Duplicate deliveries return 200 without reprocessing.
 - **JWS webhook verification.** Verifone signs webhooks with JWS (JSON Web Signature) using JWKS. The Worker canonicalizes the JSON body per RFC 8785, matches the `kid` from the `x-vfi-jws` header against cached JWKS, and verifies with the Web Crypto API.
@@ -151,3 +151,4 @@ All IDs are UUID v4 (no auto-increment). Amounts are integers in minor units.
 6. **No secrets in code.** Use `wrangler secret put`. `.dev.vars` is gitignored.
 7. **Maintain the audit trail.** Every state transition goes into `payment_events` with source and timestamp.
 8. **Respect the D1 schema.** UUIDs for IDs, not auto-increment. Don't add card-related columns.
+9. **⚠️ CRITICAL: Price integrity vulnerability exists.** Current implementation trusts client-supplied prices. This allows price manipulation attacks (lowering unit prices, fabricating SKUs, inconsistent quantities). **DO NOT DEPLOY TO PRODUCTION** without implementing a server-side product catalog that provides authoritative pricing. The client should only send product IDs and quantities - never prices or totals.

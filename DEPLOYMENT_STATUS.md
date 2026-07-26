@@ -7,15 +7,30 @@
 3. **Code Quality**: Full TDD implementation with excellent test coverage
 4. **Architecture**: Complete payments gateway with security hardening
 
-## 🚫 Current Blocker: API Token Permissions
+## 🚫 **CRITICAL SECURITY VULNERABILITY - DO NOT DEPLOY**
 
-The `CLOUDFLARE_API_TOKEN` has basic account access but lacks Worker and D1 permissions required for deployment.
+**Price Manipulation Attack Vector**: The current implementation trusts client-supplied prices in the `LineItem` interface:
 
-**Verified Token Status:**
-- ✅ Account access: Can read account `65b3492fbec7ee7861762efce4bc9aeb` (akicloudflare)
-- ❌ D1 database access: `"success": false`
-- ❌ Workers deployment access: Authentication error [code: 10000]
-- ❌ User memberships: Missing `User->Memberships->Read` permission
+```typescript
+// VULNERABLE: Client controls unit_price and total_amount
+interface LineItem {
+  unit_price: number;   // ❌ Client-supplied, trusted 
+  total_amount: number; // ❌ Client-supplied, trusted
+}
+
+// VULNERABLE: Server-side "validation" just sums client prices
+const totalAmount = body.items.reduce((sum, item) => {
+  return sum + (item.total_amount ?? item.unit_price * item.quantity);
+}, 0);
+```
+
+**Attack Examples**:
+- Client sets `unit_price: 1` for expensive items
+- Client provides `total_amount: 100` while `unit_price * quantity = 10000`  
+- Client fabricates `sku` values for non-existent products
+- Client manipulates quantities vs totals inconsistently
+
+**Required Fix**: Implement server-side product catalog before any deployment.
 
 ## 🔧 Immediate Next Steps
 
