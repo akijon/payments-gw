@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:check": "./scripts/setup-api-token.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -13,6 +14,7 @@
     "db:migrate:prod": "wrangler d1 execute irja-payments --file=migrations/0001_init.sql --remote",
     "db:query:local": "wrangler d1 execute irja-payments --local --command",
     "db:query:prod": "wrangler d1 execute irja-payments --remote --command",
+    "secrets:setup": "./scripts/setup-secrets.sh",
     "lint": "tsc --noEmit",
     "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'"
   },
