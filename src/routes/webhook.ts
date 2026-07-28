@@ -145,7 +145,7 @@ webhookRoute.post('/', async (c) => {
   }
 
   let verifiedTransactionId: string | undefined;
-  if (orderStatus === 'paid' || orderStatus === 'refunded') {
+  if (orderStatus === 'paid' || orderStatus === 'refunded' || orderStatus === 'failed') {
     try {
       const { getCheckout, parseCheckoutResult } = await import('../lib/verifone');
       const detail = await getCheckout(c.env, checkoutId);
@@ -156,12 +156,21 @@ webhookRoute.post('/', async (c) => {
         merchantReference: order.order_number,
         requireTransactionId: orderStatus === 'paid',
       });
-      if (orderStatus === 'paid') {
+      if (orderStatus === 'paid' || orderStatus === 'failed') {
         const result = parseCheckoutResult(detail);
-        if (result.status !== 'success') {
-          return c.json({ error: 'Checkout not yet confirmed paid', code: 'verification_pending' }, 503);
+        const expected = orderStatus === 'paid' ? 'success' : 'failed';
+        if (result.status !== expected) {
+          // Fail closed: a webhook claiming an outcome the provider does not yet
+          // (or does not) confirm must not change order state. Do not mark the
+          // event processed, so a legitimate confirmation can still apply later.
+          return c.json(
+            { error: `Checkout not yet confirmed ${orderStatus}`, code: 'verification_pending' },
+            503,
+          );
         }
-        verifiedTransactionId = detail.transaction_id;
+        if (orderStatus === 'paid') {
+          verifiedTransactionId = detail.transaction_id;
+        }
       } else {
         const refund = payload.content;
         const refundEvent = refund?.id

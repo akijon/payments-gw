@@ -109,9 +109,19 @@ describe('POST /api/webhooks/verifone', () => {
     expect(order!.verifone_transaction_id).toBe('txn-s2s');
   });
 
-  it('updates order to failed on "Checkout - Transaction failed"', async () => {
+  it('updates order to failed on "Checkout - Transaction failed" once the provider confirms it', async () => {
     const checkoutId = 'chk-wh-fail';
     const orderId = await seedOrder(checkoutId);
+    const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: checkoutId,
+      status: 'DECLINED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-HOOK',
+      events: [{ type: 'TRANSACTION_FAILED', id: 'txn-fail-s2s', timestamp: new Date().toISOString() }],
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({ status: 'failed', transactionId: 'txn-fail-s2s' });
 
     const resp = await SELF.fetch('https://test.example.com/api/webhooks/verifone', {
       method: 'POST',
@@ -123,6 +133,76 @@ describe('POST /api/webhooks/verifone', () => {
 
     const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
     expect(order!.status).toBe('failed');
+  });
+
+  it('does not mark an order failed when the provider has not confirmed the failure', async () => {
+    // A delayed/stale "Transaction failed" webhook must not flip order state on its
+    // own claim — the provider must confirm failure server-to-server first.
+    const checkoutId = 'chk-wh-fail-unverified';
+    const orderId = await seedOrder(checkoutId);
+    const { parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({ status: 'pending' });
+
+    const eventId = 'evt-fail-unverified';
+    const resp = await SELF.fetch('https://test.example.com/api/webhooks/verifone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-vfi-jws': 'valid.jws.sig' },
+      body: webhookPayload('Checkout - Transaction failed', checkoutId, undefined, eventId),
+    });
+
+    expect(resp.status).toBe(503);
+    const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order!.status).toBe('checkout_created');
+    const processed = await env.DB.prepare('SELECT 1 FROM processed_webhooks WHERE verifone_event_id = ?')
+      .bind(eventId)
+      .first();
+    expect(processed).toBeNull();
+  });
+
+  it('recovers an order from failed to paid once the provider confirms success', async () => {
+    // A prior (correctly or incorrectly applied) failed transition must not be a dead
+    // end: a later verified success has to be able to override it.
+    const checkoutId = 'chk-wh-recover';
+    const orderId = await seedOrder(checkoutId);
+    await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ?').bind('failed', orderId).run();
+
+    const resp = await SELF.fetch('https://test.example.com/api/webhooks/verifone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-vfi-jws': 'valid.jws.sig' },
+      body: webhookPayload('Checkout - Transaction succeeded', checkoutId, 'txn-recovered'),
+    });
+
+    expect(resp.status).toBe(200);
+    const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order!.status).toBe('paid');
+  });
+
+  it('refunds an order that reconciliation already moved from paid to settled', async () => {
+    // Daily reconciliation moves paid -> settled before a refund webhook may arrive;
+    // that must not strand the refund as a permanently unresolved illegal_transition.
+    const checkoutId = 'chk-wh-refund-settled';
+    const orderId = await seedOrder(checkoutId);
+    await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ?').bind('settled', orderId).run();
+    const { getCheckout } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: checkoutId,
+      status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-HOOK',
+      transaction_id: 'txn-s2s',
+      events: [{ type: 'TxnRefundApproved', id: 'refund-settled-1', timestamp: new Date().toISOString() }],
+    });
+
+    const resp = await SELF.fetch('https://test.example.com/api/webhooks/verifone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-vfi-jws': 'valid.jws.sig' },
+      body: webhookPayload('TxnRefundApproved', checkoutId, 'refund-settled-1'),
+    });
+
+    expect(resp.status).toBe(200);
+    const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order!.status).toBe('refunded');
   });
 
   it('updates order to refunded only after provider API confirmation', async () => {

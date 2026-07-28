@@ -25,5 +25,4 @@ INSERT OR IGNORE INTO products (id, name, description, unit_price, currency, act
     ('LOPAPEYSA-M',    'Lopapeysa M',               'Traditional Icelandic wool sweater, M', 18000, 'ISK', 1),
     ('LOPAPEYSA-L',    'Lopapeysa L',               'Traditional Icelandic wool sweater, L', 18000, 'ISK', 1),
     ('WOOL-SCARF',    'Wool Scarf',                'Hand-knit Icelandic wool scarf',         7500,  'ISK', 1),
-    ('WOOL-HAT',      'Wool Hat',                  'Icelandic wool beanie',                  4500,  'ISK', 1),
-    ('TEST-001',      'Test Product',              'Catalog entry for integration tests',    1000,  'ISK', 1);
+    ('WOOL-HAT',      'Wool Hat',                  'Icelandic wool beanie',                  4500,  'ISK', 1);

@@ -217,4 +217,73 @@ describe('POST /api/checkout', () => {
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ code: 'idempotency_conflict' });
   });
+
+  it('rejects a retry while a checkout attempt is still genuinely in flight', async () => {
+    const idempotencyKey = 'checkout-inflight-00001';
+    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] });
+    const first = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { order_id: string };
+
+    // Simulate a crash after the claim was made but before any provider session
+    // could have been created: recent updated_at, no checkout_url.
+    await env.DB.prepare(
+      "UPDATE checkout_attempts SET status = 'processing', checkout_url = NULL WHERE order_id = ?",
+    )
+      .bind(firstBody.order_id)
+      .run();
+
+    const retry = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toMatchObject({ code: 'idempotency_processing' });
+    expect(retry.headers.get('Retry-After')).toBe('2');
+  });
+
+  it('reclaims a stale idempotency attempt that never got a provider checkout_url', async () => {
+    // A Worker that dies before persisting checkout_url must not wedge the key
+    // forever — once the lease window has passed, a retry should succeed fresh.
+    const idempotencyKey = 'checkout-stale-00001';
+    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] });
+
+    // Distinct provider checkout IDs per call, as a real second Verifone session would get.
+    const { createCheckout } = await import('../src/lib/verifone');
+    vi.mocked(createCheckout)
+      .mockResolvedValueOnce({ checkoutId: 'chk-stale-1', checkoutUrl: 'https://pay.mock.verifone/chk-stale-1' })
+      .mockResolvedValueOnce({ checkoutId: 'chk-stale-2', checkoutUrl: 'https://pay.mock.verifone/chk-stale-2' });
+
+    const first = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { order_id: string };
+
+    await env.DB.prepare(
+      "UPDATE checkout_attempts SET status = 'processing', checkout_url = NULL, updated_at = '2000-01-01 00:00:00' WHERE order_id = ?",
+    )
+      .bind(firstBody.order_id)
+      .run();
+
+    const retry = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(retry.status).toBe(200);
+    const retryBody = (await retry.json()) as { order_id: string; idempotent_replay: boolean };
+    expect(retryBody.idempotent_replay).toBe(false);
+    expect(retryBody.order_id).not.toBe(firstBody.order_id);
+
+    const orders = await env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first<{ count: number }>();
+    expect(orders?.count).toBe(2); // original order left orphaned at 'checkout_created', new one created
+  });
 });

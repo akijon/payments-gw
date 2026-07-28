@@ -124,6 +124,8 @@ checkoutRoute.post('/', async (c) => {
     generateOrderNumber,
     getOrderById,
     hashIdempotencyValue,
+    reclaimStaleCheckoutAttempt,
+    recordCheckoutUrl,
     updateOrderStatus,
     logPaymentEvent,
   } = await import('../lib/db');
@@ -150,24 +152,32 @@ checkoutRoute.post('/', async (c) => {
         409,
       );
     }
-    if (claim.attempt.status !== 'completed' || !claim.attempt.checkout_url) {
+    if (claim.attempt.checkout_url) {
+      const existingOrder = await getOrderById(c.env.DB, claim.attempt.order_id);
+      if (!existingOrder) throw new Error('Completed checkout attempt has no order');
+      return c.json({
+        checkout_url: claim.attempt.checkout_url,
+        order_id: existingOrder.id,
+        order_number: existingOrder.order_number,
+        amount: existingOrder.amount,
+        currency: existingOrder.currency,
+        total_amount: existingOrder.amount,
+        order_status_token: await deriveOrderAccessToken(idempotencyKey, existingOrder.id),
+        idempotent_replay: true,
+      });
+    }
+
+    // No checkout_url yet: either genuinely in flight, previously failed, or the
+    // Worker died before a provider session could have been created (checkout_url
+    // is written immediately once one exists — see recordCheckoutUrl). In the last
+    // case it is safe to reclaim the row and retry as a fresh claim.
+    const reclaim = await reclaimStaleCheckoutAttempt(c.env.DB, { keyHash, requestHash, orderId });
+    if (!reclaim.reclaimed) {
       return c.json({ error: 'Checkout attempt is not reusable', code: `idempotency_${claim.attempt.status}` }, 409, {
         'Retry-After': claim.attempt.status === 'processing' ? '2' : '0',
       });
     }
-
-    const existingOrder = await getOrderById(c.env.DB, claim.attempt.order_id);
-    if (!existingOrder) throw new Error('Completed checkout attempt has no order');
-    return c.json({
-      checkout_url: claim.attempt.checkout_url,
-      order_id: existingOrder.id,
-      order_number: existingOrder.order_number,
-      amount: existingOrder.amount,
-      currency: existingOrder.currency,
-      total_amount: existingOrder.amount,
-      order_status_token: await deriveOrderAccessToken(idempotencyKey, existingOrder.id),
-      idempotent_replay: true,
-    });
+    // Reclaimed: fall through and create a fresh checkout for `orderId`.
   }
 
   const orderAccessToken = await deriveOrderAccessToken(idempotencyKey, orderId);
@@ -217,6 +227,11 @@ checkoutRoute.post('/', async (c) => {
     });
     return c.json({ error: 'Failed to create checkout session', code: 'checkout_provider_unavailable' }, 502);
   }
+
+  // Persist the provider URL immediately, before any other write, so a crash from
+  // here on always leaves a checkout_url behind — the reclaim path above only ever
+  // touches attempts where checkout_url is still null.
+  await recordCheckoutUrl(c.env.DB, keyHash, checkoutResult.checkoutUrl);
 
   const applied = await updateOrderStatus(c.env.DB, orderId, 'checkout_created', {
     verifoneCheckoutId: checkoutResult.checkoutId,

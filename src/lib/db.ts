@@ -280,6 +280,19 @@ export async function claimCheckoutAttempt(
   return { claimed: (result.meta.changes ?? 0) === 1, attempt };
 }
 
+/** Persist the provider checkout URL as soon as it exists, before any further writes,
+ *  so a crash after this point never leaves an in-flight attempt indistinguishable
+ *  from one where no provider session was created yet. */
+export async function recordCheckoutUrl(db: D1Database, keyHash: string, checkoutUrl: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE checkout_attempts SET checkout_url = ?, updated_at = datetime('now')
+     WHERE key_hash = ? AND status = 'processing'`,
+    )
+    .bind(checkoutUrl, keyHash)
+    .run();
+}
+
 export async function completeCheckoutAttempt(db: D1Database, keyHash: string, checkoutUrl: string): Promise<void> {
   await db
     .prepare(
@@ -289,6 +302,37 @@ export async function completeCheckoutAttempt(db: D1Database, keyHash: string, c
     )
     .bind(checkoutUrl, keyHash)
     .run();
+}
+
+const STALE_CHECKOUT_ATTEMPT_SECONDS = 45;
+
+/** Reclaim a 'processing' attempt that never got a checkout_url within the lease
+ *  window — i.e. the Worker died before any provider session could have been created,
+ *  so it is safe to let the caller retry as a fresh claim. Attempts that already have
+ *  a checkout_url are never reclaimed, since a provider session may exist for them. */
+export async function reclaimStaleCheckoutAttempt(
+  db: D1Database,
+  input: { keyHash: string; requestHash: string; orderId: string },
+): Promise<{ reclaimed: boolean; attempt: CheckoutAttempt }> {
+  const result = await db
+    .prepare(
+      `UPDATE checkout_attempts
+     SET request_hash = ?, order_id = ?, status = 'processing', checkout_url = NULL, updated_at = datetime('now')
+     WHERE key_hash = ? AND status = 'processing' AND checkout_url IS NULL
+       AND updated_at < datetime('now', '-' || ? || ' seconds')`,
+    )
+    .bind(input.requestHash, input.orderId, input.keyHash, STALE_CHECKOUT_ATTEMPT_SECONDS)
+    .run();
+
+  const attempt = await db
+    .prepare(
+      `SELECT key_hash, request_hash, order_id, status, checkout_url
+     FROM checkout_attempts WHERE key_hash = ?`,
+    )
+    .bind(input.keyHash)
+    .first<CheckoutAttempt>();
+  if (!attempt) throw new Error('Failed to reclaim checkout attempt');
+  return { reclaimed: (result.meta.changes ?? 0) === 1, attempt };
 }
 
 export async function failCheckoutAttempt(db: D1Database, keyHash: string): Promise<void> {
@@ -336,12 +380,16 @@ export async function processWebhookAtomically(
     .prepare('INSERT OR IGNORE INTO processed_webhooks (verifone_event_id, event_type) VALUES (?, ?)')
     .bind(eventId, input.eventType);
 
+  // 'paid' includes 'failed' so a verified success can recover an order that a
+  // prior unverified/incorrect failure transition already marked failed.
+  // 'refunded' includes 'settled' since daily reconciliation moves paid -> settled
+  // before a refund webhook may arrive.
   const allowedFrom =
     input.status === 'paid'
-      ? "status IN ('pending', 'checkout_created', 'payment_pending')"
+      ? "status IN ('pending', 'checkout_created', 'payment_pending', 'failed')"
       : input.status === 'failed'
         ? "status IN ('pending', 'checkout_created', 'payment_pending')"
-        : "status = 'paid'";
+        : "status IN ('paid', 'settled')";
   const update = db
     .prepare(
       `UPDATE orders SET status = ?, updated_at = datetime('now'),
