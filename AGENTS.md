@@ -1,5 +1,27 @@
 # AGENTS.md — Irja Payments Gateway
 
+## Hard rules (system alignment)
+
+Non-negotiable for every agent session in this repo:
+
+1. **Zero pedagogical filler.** Do not explain standard cloud-native concepts, TypeScript syntax, Wrangler workflows, HTTP basics, or Cloudflare Workers 101 unless explicitly asked. Deliver diffs, commands, and results.
+2. **Test-first enforcement.** Every feature or fix ships with a corresponding Vitest unit/integration test. Write the failing test first; do not mark work complete until `npm test` (and relevant gates) pass. No production/path change without test coverage for the behavior.
+3. **Edge-first constraints.** Default target is Cloudflare Workers: ES modules, strict TypeScript, no Node-only APIs unless already proven under `nodejs_compat`, no filesystem assumptions in runtime code, bindings via `Env`, secrets via Wrangler Secrets / `.dev.vars` only.
+
+## Trust boundary (operational tiers)
+
+| Tier | Scope | Authority |
+|------|--------|-----------|
+| **1 — Read & Verify** | Tests, typecheck/lint, static analysis, log tail, local memory/docs, file reads | **Fully autonomous.** Loop until green. Never ask permission to test or read local files. |
+| **2 — Non-destructive write** | App/test code, scaffolding, local commits, markdown docs | **Autonomous (local).** Write/commit locally; human reviews final diff, not each step. |
+| **3 — State & infrastructure** | D1 migrations/schema apply, IAM/RBAC, crypto changes, live webhooks, `wrangler deploy`, remote secrets, prod/sandbox mutations | **Hard stop.** Draft artifact only → halt → explicit human approval (hardware key / YubiKey when required) before execute. |
+
+### Enforcement directives
+
+1. **Auto-testing.** After any `.ts` change, run the associated suite via `npm test` (wrapped in `scripts/with-agent-safe-env.sh`). Do not ask permission. On failure: max **3** self-correction attempts, then halt with failing output.
+2. **Isolate secrets.** Local T1/T2 loops must not use real Cloudflare / Landsbankinn / Verifone credentials from the process environment. `npm test` / `typecheck` / `lint` strip those via `with-agent-safe-env.sh`. Prefer placeholders in gitignored `.dev.vars` (mode `0600`). Never print or commit secrets. Remote deploy/migrate remain Tier 3 and intentionally keep host credentials only after human approval.
+3. **Review gates (Tier 3 paths).** Halt and request explicit review before applying changes to: `src/lib/crypto.ts`, anything under `migrations/`, `wrangler.toml`, `wrangler.production.toml*`, deploy scripts, or any remote migrate/deploy command.
+
 ## What This Is
 
 A payments gateway for the Irja e-commerce storefront (`irja.is`, currently staged at `irja.khalipa.net`). Handles checkout session creation, payment verification, webhook processing, and daily settlement reconciliation.
@@ -24,7 +46,7 @@ Cron (06:00 UTC) → Worker /scheduled → Landsbankinn Acquiring API → D1 (se
 ### Key design decisions
 
 - **No card data ever enters this system.** Verifone HPP owns the card capture form. The Worker only sees transaction IDs and metadata. This keeps PCI scope at SAQ A.
-- **Server-side amount computation.** The checkout amount is calculated from client-supplied line items in the Worker. **WARNING: Current implementation trusts client-supplied prices - this creates a critical security vulnerability. Production deployment requires a server-side product catalog with authoritative pricing.**
+- **Server-side amount computation.** Checkout accepts only `product_id` (or `sku`) + `quantity`. Unit prices come from the D1 `products` catalog; client `unit_price` / `total_amount` are rejected as price manipulation.
 - **Verify, don't trust.** Both the redirect return and webhook are verified server-to-server against the Verifone API before order status changes. The `transaction_id` from the redirect must match the checkout's `transaction_id`.
 - **Idempotent webhooks.** A `processed_webhooks` table deduplicates by `verifone_event_id`. Duplicate deliveries return 200 without reprocessing.
 - **JWS webhook verification.** Verifone signs webhooks with JWS (JSON Web Signature) using JWKS. The Worker canonicalizes the JSON body per RFC 8785, matches the `kid` from the `x-vfi-jws` header against cached JWKS, and verifies with the Web Crypto API.
@@ -43,6 +65,7 @@ src/
 ├── lib/
 │   ├── verifone.ts          # OAuth2 JWT, checkout create/read, payment parsing
 │   ├── landsbankinn.ts      # OAuth2, settlements, transactions (read-only reconciliation)
+│   ├── catalog.ts           # Authoritative product catalog + secure cart resolution
 │   ├── db.ts                # D1 query helpers, UUID/order number generation
 │   ├── jwks.ts              # JWKS fetch + KV cache for webhook verification
 │   └── crypto.ts            # JWS verification, JSON canonicalization (RFC 8785)
@@ -53,7 +76,8 @@ src/
     └── api.ts               # Shared domain types (Order, Verifone, Landsbankinn)
 
 migrations/
-└── 0001_init.sql            # D1 schema: orders, payment_events, processed_webhooks, settlements
+├── 0001_init.sql            # D1 schema: orders, payment_events, processed_webhooks, settlements
+└── 0002_products.sql        # Product catalog + seed prices (authoritative)
 
 test/
 ├── apply-migrations.ts      # Inlined D1 schema for Workers runtime (avoids node:fs issue)
@@ -109,6 +133,7 @@ npx wrangler secret put VERIFONE_CLIENT_SECRET
 | Table | Purpose |
 |-------|---------|
 | `orders` | Order lifecycle: pending → checkout_created → paid → settled |
+| `products` | Authoritative catalog: id/SKU, name, unit_price (minor units), active |
 | `payment_events` | Audit log: every state transition with source, payload, verified flag |
 | `processed_webhooks` | Idempotency: deduplicates by `verifone_event_id` |
 | `settlements` | Landsbankinn settlement batches from daily reconciliation cron |
@@ -143,12 +168,15 @@ All IDs are UUID v4 (no auto-increment). Amounts are integers in minor units.
 
 ## Constraints for Agents Working on This Repo
 
-1. **Never store, process, or transmit card data.** No PAN, CVV, expiry, or cardholder name. If a feature requires touching card data, it belongs on Verifone's side, not here.
-2. **Always verify payments server-side.** Never trust redirect query parameters or webhook payloads alone. Call `GET /v2/checkout/{id}` and confirm the transaction before updating order status.
+Hard rules above always apply. Domain constraints:
+
+1. **Never store, process, or transmit card data.** No PAN, CVV, expiry, or cardholder name. Card capture stays on Verifone HPP.
+2. **Always verify payments server-side.** Never trust redirect query params or webhook payloads alone. Call `GET /v2/checkout/{id}` before status transitions.
 3. **Keep webhooks idempotent.** Check `processed_webhooks` before processing. Return 200 for duplicates.
-4. **Amounts are integers.** Minor units (aurar for ISK). Never use floating-point for money.
-5. **Test-first.** Write failing tests before implementation. Use `vi.mock` + `SELF.fetch` pattern.
-6. **No secrets in code.** Use `wrangler secret put`. `.dev.vars` is gitignored.
-7. **Maintain the audit trail.** Every state transition goes into `payment_events` with source and timestamp.
-8. **Respect the D1 schema.** UUIDs for IDs, not auto-increment. Don't add card-related columns.
-9. **⚠️ CRITICAL: Price integrity vulnerability exists.** Current implementation trusts client-supplied prices. This allows price manipulation attacks (lowering unit prices, fabricating SKUs, inconsistent quantities). **DO NOT DEPLOY TO PRODUCTION** without implementing a server-side product catalog that provides authoritative pricing. The client should only send product IDs and quantities - never prices or totals.
+4. **Amounts are integers.** Minor units (aurar for ISK). No floating-point money.
+5. **Test-first (Vitest).** Failing test before implementation. Pattern: `vi.mock` + `SELF.fetch` + real Miniflare D1. Do not call work complete without green tests.
+6. **No secrets in code.** `wrangler secret put`; `.dev.vars` gitignored.
+7. **Maintain the audit trail.** Every state transition → `payment_events` with source + timestamp.
+8. **Respect the D1 schema.** UUID IDs only. No card-related columns.
+9. **Price integrity is mandatory.** Client sends only `product_id`/`sku` + `quantity`. Reject client `unit_price` / `total_amount`. Catalog in D1 `products`. Return + webhook must verify Verifone amount vs stored order amount.
+10. **No Teya shims.** Storefront contract is Verifone paths only; do not add insecure compatibility layers.

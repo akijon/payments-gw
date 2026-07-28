@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
-import type { Env } from '../src/types/env';
 
-declare module 'cloudflare:test' {
-  interface ProvidedEnv extends Env {}
-}
-
-// Mock Verifone API to focus on the price manipulation vulnerability
 vi.mock('../src/lib/verifone', () => ({
   getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
@@ -18,128 +12,120 @@ vi.mock('../src/lib/verifone', () => ({
 }));
 
 beforeEach(async () => {
-  await env.DB.exec('DELETE FROM orders;');
-  await env.DB.exec('DELETE FROM payment_events;');
-  await env.DB.exec('DELETE FROM processed_webhooks;');
+  await env.DB.exec(
+    'DELETE FROM checkout_attempts; DELETE FROM order_access_tokens; DELETE FROM payment_events; DELETE FROM processed_webhooks; DELETE FROM orders;',
+  );
 });
 
 describe('Price Manipulation Security Tests', () => {
-
-  it('should reject checkout when client manipulates unit price to $0.01', async () => {
-    // Attack: Client sets unit_price to 1 aurar (0.01 ISK) for expensive item
+  it('rejects checkout when client sends unit_price (price manipulation)', async () => {
     const maliciousRequest = {
       items: [
         {
           name: 'Expensive Product (RRP: 50000 aurar)',
           quantity: 1,
-          unit_price: 1,        // ❌ ATTACK: Should be 50000, client sets to 1
-          total_amount: 1,      // ❌ ATTACK: Should be 50000, client sets to 1
-          sku: 'EXPENSIVE-001'
-        }
+          unit_price: 1,
+          total_amount: 1,
+          sku: 'HOODIE-BLK-M',
+        },
       ],
-      customer_email: 'attacker@example.com'
+      customer_email: 'attacker@example.com',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify(maliciousRequest),
     });
 
-    // Current vulnerable implementation will accept this - TEST SHOULD FAIL
-    // Secure implementation should reject client-supplied prices
     expect(response.status).toBe(400);
-    
-    const responseData = await response.json() as { error?: string };
-    expect(responseData.error).toContain('price manipulation');
+    const responseData = (await response.json()) as { error?: string; code?: string };
+    expect(responseData.error?.toLowerCase()).toContain('price manipulation');
+    expect(responseData.code).toBe('price_manipulation');
   });
 
-  it('should reject checkout when client provides inconsistent price and total', async () => {
-    // Attack: Client sends mismatched unit_price * quantity vs total_amount
+  it('rejects checkout when client provides inconsistent price and total', async () => {
     const maliciousRequest = {
       items: [
         {
           name: 'Test Product',
           quantity: 10,
-          unit_price: 1000,     // 1000 * 10 = 10000
-          total_amount: 100,    // ❌ ATTACK: Claims total is only 100
-          sku: 'TEST-001'
-        }
+          unit_price: 1000,
+          total_amount: 100,
+          sku: 'TEST-001',
+        },
       ],
-      customer_email: '[EMAIL]'
+      customer_email: 'attacker@example.com',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify(maliciousRequest),
     });
 
-    // Current vulnerable implementation accepts inconsistent totals - TEST SHOULD FAIL
     expect(response.status).toBe(400);
-    
-    const responseData = await response.json() as { error?: string };
-    expect(responseData.error).toContain('inconsistent pricing');
+    const responseData = (await response.json()) as { error?: string; code?: string };
+    expect(responseData.error?.toLowerCase()).toContain('inconsistent pricing');
+    expect(responseData.code).toBe('inconsistent_pricing');
   });
 
-  it('should reject checkout when client provides unknown SKU', async () => {
-    // Attack: Client fabricates SKU for non-existent product
+  it('rejects checkout when client provides unknown SKU', async () => {
     const maliciousRequest = {
       items: [
         {
-          name: 'Fabricated Product',
+          product_id: 'FAKE-999999',
           quantity: 1,
-          unit_price: 1,        // ❌ ATTACK: Made-up price
-          total_amount: 1,      // ❌ ATTACK: Made-up total
-          sku: 'FAKE-999999'    // ❌ ATTACK: Non-existent SKU
-        }
+        },
       ],
-      customer_email: 'attacker@example.com'
+      customer_email: 'attacker@example.com',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify(maliciousRequest),
     });
 
-    // Current vulnerable implementation accepts unknown SKUs - TEST SHOULD FAIL
     expect(response.status).toBe(400);
-    
-    const responseData = await response.json() as { error?: string };
-    expect(responseData.error).toContain('unknown product');
+    const responseData = (await response.json()) as { error?: string; code?: string };
+    expect(responseData.error?.toLowerCase()).toContain('unknown product');
+    expect(responseData.code).toBe('unknown_product');
   });
 
-  it('should demonstrate current vulnerable behavior (this test documents the vulnerability)', async () => {
-    // This test documents the current vulnerable behavior
-    // It should pass now but fail once we implement secure pricing
-    const vulnerableRequest = {
-      items: [
-        {
-          name: 'High-Value Item',
-          quantity: 1,
-          unit_price: 1,        // Attacker sets price to 1 aurar
-          total_amount: 1,      // Attacker sets total to 1 aurar
-          sku: 'WHATEVER-123'   // Attacker uses any SKU
-        }
-      ],
-      customer_email: 'attacker@example.com'
+  it('accepts secure product_id + quantity and charges catalog price only', async () => {
+    const secureRequest = {
+      items: [{ product_id: 'HOODIE-BLK-M', quantity: 1 }],
+      customer_email: 'buyer@example.com',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(vulnerableRequest),
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(secureRequest),
     });
 
-    // VULNERABILITY: Current implementation accepts this malicious request
     expect(response.status).toBe(200);
-    
-    const responseData = await response.json() as { checkout_url?: string; order_id?: string };
+    const responseData = (await response.json()) as {
+      checkout_url?: string;
+      order_id?: string;
+      amount?: number;
+    };
     expect(responseData.checkout_url).toBeDefined();
     expect(responseData.order_id).toBeDefined();
-    
-    // The attacker successfully created a 1 aurar ($0.0001) checkout for any item
-    console.warn('🚨 SECURITY VULNERABILITY CONFIRMED: Client can set arbitrary prices');
+    expect(responseData.amount).toBe(8900); // catalog price, not client-controlled
+  });
+
+  it('rejects client unit_price even when product_id is valid', async () => {
+    const response = await SELF.fetch('http://example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, unit_price: 1 }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    const data = (await response.json()) as { error?: string };
+    expect(data.error?.toLowerCase()).toContain('price manipulation');
   });
 });

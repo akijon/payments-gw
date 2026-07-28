@@ -9,10 +9,14 @@ export interface Env {
   // ─── Cloudflare bindings ───────────────────────────────────
   DB: D1Database;
   CACHE: KVNamespace;
+  CHECKOUT_RATE_LIMITER?: {
+    limit(options: { key: string }): Promise<{ success: boolean }>;
+  };
 
   // ─── Environment variables (wrangler.toml [vars]) ────────
   ENVIRONMENT: string;
   STOREFRONT_URL: string;
+  PUBLIC_API_URL?: string;
   VERIFONE_API_BASE: string;
   VERIFONE_OAUTH_URL: string;
   LANDSBANKINN_API_BASE: string;

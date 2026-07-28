@@ -5,20 +5,29 @@
 // ─── Order types ─────────────────────────────────────────────────
 
 export type OrderStatus =
-  | 'pending'
-  | 'checkout_created'
-  | 'payment_pending'
-  | 'paid'
-  | 'failed'
-  | 'refunded'
-  | 'settled';
+  'pending' | 'checkout_created' | 'payment_pending' | 'paid' | 'failed' | 'refunded' | 'settled';
 
+/**
+ * Stored / response line item after catalog resolution.
+ * unit_price and total_amount always come from the server catalog — never the client.
+ */
 export interface LineItem {
+  product_id: string;
   name: string;
   quantity: number;
-  unit_price: number;   // minor units
-  total_amount: number; // minor units
+  unit_price: number; // minor units — from catalog
+  total_amount: number; // minor units — unit_price * quantity
+  sku?: string; // same as product_id when set
+}
+
+/**
+ * Client checkout cart line. Only product identity + quantity are accepted.
+ * Sending unit_price or total_amount is rejected as price manipulation.
+ */
+export interface CheckoutItemRequest {
+  product_id?: string;
   sku?: string;
+  quantity: number;
 }
 
 export interface Order {
@@ -26,7 +35,7 @@ export interface Order {
   order_number: string;
   status: OrderStatus;
   currency: string;
-  amount: number;          // minor units
+  amount: number; // minor units
   customer_email?: string;
   customer_name?: string;
   items: LineItem[];

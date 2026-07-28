@@ -9,24 +9,29 @@ The current `CLOUDFLARE_API_TOKEN` lacks sufficient permissions for Wrangler 4.x
 Based on Wrangler 4.x documentation, the API token needs the following permissions:
 
 ### Account Permissions
+
 - **Account:Read** - Required to read account information
 - **User:Read** - Required for user authentication
 - **User -> Memberships:Read** - Required to read account membership
 
-### Workers Permissions  
+### Workers Permissions
+
 - **Workers Scripts:Edit** - Deploy and update Workers
 - **Workers Scripts:Read** - Read Worker scripts and deployments
 - **Workers:Edit** - Manage Worker configuration
 
 ### D1 Permissions
+
 - **D1:Edit** - Manage D1 databases and execute queries
 - **D1:Read** - Read D1 database information
 
 ### KV Permissions
+
 - **Workers KV Storage:Edit** - Manage KV namespaces and data
 - **Workers KV Storage:Read** - Read KV data
 
 ### Zone Permissions (if deploying to custom domain)
+
 - **Zone:Read** - Read zone information
 - **Zone Settings:Edit** - Configure zone settings (if needed)
 
@@ -42,13 +47,15 @@ Based on Wrangler 4.x documentation, the API token needs the following permissio
 ## Alternative: Use Global API Key
 
 For development, you can use the Global API Key instead:
+
 - Set `CLOUDFLARE_EMAIL` and `CLOUDFLARE_API_KEY` environment variables
-- Remove `CLOUDFLARE_API_TOKEN` 
+- Remove `CLOUDFLARE_API_TOKEN`
 - Global API Key has all permissions but is less secure
 
 ## Testing the Token
 
 After updating the token, test with:
+
 ```bash
 npx wrangler whoami
 npx wrangler deployments list

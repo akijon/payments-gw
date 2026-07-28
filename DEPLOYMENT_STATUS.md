@@ -1,69 +1,49 @@
-# Deployment Status Report
+# Deployment Status — Irja Payments Gateway
 
-## ✅ Successfully Completed
+## Security: price integrity FIXED
 
-1. **Wrangler Upgrade**: Successfully upgraded from v3.x to v4.114.0
-2. **Test Compatibility**: All 25 tests still pass with Wrangler 4.x
-3. **Code Quality**: Full TDD implementation with excellent test coverage
-4. **Architecture**: Complete payments gateway with security hardening
+Client-controlled pricing is blocked. Checkout uses the D1 `products` catalog.
+Return and webhook paths verify Verifone amount against the order amount.
 
-## 🚫 **CRITICAL SECURITY VULNERABILITY - DO NOT DEPLOY**
+See `SECURITY_VULNERABILITY_CRITICAL.md` for the fix summary.
 
-**Price Manipulation Attack Vector**: The current implementation trusts client-supplied prices in the `LineItem` interface:
+## Still required before production
 
-```typescript
-// VULNERABLE: Client controls unit_price and total_amount
-interface LineItem {
-  unit_price: number;   // ❌ Client-supplied, trusted 
-  total_amount: number; // ❌ Client-supplied, trusted
-}
+| Item                                  | Status                                |
+| ------------------------------------- | ------------------------------------- |
+| Server-side product catalog           | ✅ Done                               |
+| Reject client unit_price/total_amount | ✅ Done                               |
+| S2S payment verify on return          | ✅ Done                               |
+| S2S + amount check on webhook paid    | ✅ Done                               |
+| JWS webhook verification              | ✅ Done                               |
+| CORS locked to STOREFRONT_URL         | ✅ Done                               |
+| Security headers                      | ✅ Done                               |
+| Real Verifone credentials             | ❌ Blocking                           |
+| CF API token (Workers/D1/KV edit)     | ❌ Check with `npm run deploy:check`  |
+| Production product rows in D1         | ⚠️ Seed only — replace with real SKUs |
+| Storefront uses product_id + qty API  | ⚠️ Coordinate with irja storefront    |
+| WAF / rate limiting on CF             | ⚠️ Configure in dashboard             |
+| Production secrets + env vars         | ⚠️ `npm run secrets:setup`            |
 
-// VULNERABLE: Server-side "validation" just sums client prices
-const totalAmount = body.items.reduce((sum, item) => {
-  return sum + (item.total_amount ?? item.unit_price * item.quantity);
-}, 0);
+## Quick verify
+
+```bash
+npm test
+npm run lint
+npm run db:migrate:local   # includes catalog, order-token, and checkout-idempotency migrations
 ```
 
-**Attack Examples**:
-- Client sets `unit_price: 1` for expensive items
-- Client provides `total_amount: 100` while `unit_price * quantity = 10000`  
-- Client fabricates `sku` values for non-existent products
-- Client manipulates quantities vs totals inconsistently
+## Checkout API (storefront contract)
 
-**Required Fix**: Implement server-side product catalog before any deployment.
+`POST /api/checkout`
 
-## 🔧 Immediate Next Steps
+Required header: `Idempotency-Key: <crypto.randomUUID()>`
 
-1. **Update API Token**: Create a new Cloudflare API token with these permissions:
-   - **Account:Read** 
-   - **User:Read**
-   - **User -> Memberships:Read**
-   - **Workers Scripts:Edit** 
-   - **Workers Scripts:Read**
-   - **D1:Edit** 
-   - **D1:Read**
-   - **Workers KV Storage:Edit**
-   - **Workers KV Storage:Read**
+```json
+{
+  "items": [{ "product_id": "LOPAPEYSA-M", "quantity": 1 }],
+  "customer_email": "customer@example.is"
+}
+```
 
-2. **Alternative (Quick Test)**: Use Global API Key temporarily:
-   ```bash
-   export CLOUDFLARE_EMAIL="your-email@domain.com"
-   export CLOUDFLARE_API_KEY="your-global-api-key"
-   unset CLOUDFLARE_API_TOKEN
-   ```
-
-3. **Test Deployment Access**:
-   ```bash
-   npx wrangler whoami
-   npx wrangler deployments list  
-   npx wrangler d1 list
-   ```
-
-## 📋 Ready for Deployment
-
-Once API permissions are resolved, the project is ready to:
-- Deploy to Cloudflare Workers
-- Set production secrets via `wrangler secret put`
-- Test the full payment flow with sandbox credentials
-
-The implementation is **complete and tested** - only Cloudflare API access is needed.
+Response includes authoritative `amount` / `total_amount` (minor units) from the catalog.

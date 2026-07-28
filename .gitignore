@@ -10,6 +10,8 @@ dist/
 # Secrets — NEVER commit these
 .dev.vars
 .dev.vars.*
+!.dev.vars.example
+wrangler.production.toml
 *.pem
 *.key
 
