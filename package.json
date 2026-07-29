@@ -28,7 +28,17 @@
     "test:security-regression": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/security-regression.test.ts",
     "test:financial-integrity": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/financial-integrity.test.ts",
     "quality:dashboard": "node scripts/quality-dashboard.js",
-    "quality:check": "node scripts/quality-dashboard.js"
+    "quality:check": "node scripts/quality-dashboard.js",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,mts,mjs,js}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "*.{json,yml,yaml,md}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "hono": "^4.6.0"
@@ -39,6 +49,8 @@
     "@eslint/js": "^10.0.1",
     "@vitest/coverage-istanbul": "^4.1.10",
     "eslint": "^10.8.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.6",
     "prettier": "^3.9.6",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.65.0",
