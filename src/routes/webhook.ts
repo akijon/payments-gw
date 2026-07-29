@@ -163,10 +163,7 @@ webhookRoute.post('/', async (c) => {
           // Fail closed: a webhook claiming an outcome the provider does not yet
           // (or does not) confirm must not change order state. Do not mark the
           // event processed, so a legitimate confirmation can still apply later.
-          return c.json(
-            { error: `Checkout not yet confirmed ${orderStatus}`, code: 'verification_pending' },
-            503,
-          );
+          return c.json({ error: `Checkout not yet confirmed ${orderStatus}`, code: 'verification_pending' }, 503);
         }
         if (orderStatus === 'paid') {
           verifiedTransactionId = detail.transaction_id;

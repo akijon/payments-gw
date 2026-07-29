@@ -231,9 +231,7 @@ describe('POST /api/checkout', () => {
 
     // Simulate a crash after the claim was made but before any provider session
     // could have been created: recent updated_at, no checkout_url.
-    await env.DB.prepare(
-      "UPDATE checkout_attempts SET status = 'processing', checkout_url = NULL WHERE order_id = ?",
-    )
+    await env.DB.prepare("UPDATE checkout_attempts SET status = 'processing', checkout_url = NULL WHERE order_id = ?")
       .bind(firstBody.order_id)
       .run();
 
