@@ -12,6 +12,8 @@
  */
 
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { secureHeaders } from 'hono/secure-headers';
 import type { Env } from './types/env';
 import { checkoutRoute } from './routes/checkout';
 import { returnRoute } from './routes/return';
@@ -20,6 +22,45 @@ import { orderRoute } from './routes/order';
 import { reconcile } from './cron/reconcile';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// ─── Security headers on all responses ───────────────────────────
+app.use(
+  '*',
+  secureHeaders({
+    xFrameOptions: 'DENY',
+    xContentTypeOptions: 'nosniff',
+    referrerPolicy: 'no-referrer',
+    strictTransportSecurity: 'max-age=31536000; includeSubDomains',
+  }),
+);
+
+app.use('/api/*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'no-store');
+});
+
+// ─── CORS: storefront origin only (webhooks are server-to-server, no CORS) ─
+app.use('/api/checkout/*', async (c, next) => {
+  const origin = c.env.STOREFRONT_URL;
+  const middleware = cors({
+    origin,
+    allowMethods: ['POST', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Idempotency-Key'],
+    maxAge: 86400,
+  });
+  return middleware(c, next);
+});
+
+app.use('/api/orders/*', async (c, next) => {
+  const origin = c.env.STOREFRONT_URL;
+  const middleware = cors({
+    origin,
+    allowMethods: ['GET', 'OPTIONS'],
+    allowHeaders: ['Authorization'],
+    maxAge: 86400,
+  });
+  return middleware(c, next);
+});
 
 // ─── Health check ───────────────────────────────────────────────
 app.get('/health', (c) => {
@@ -43,17 +84,24 @@ app.notFound((c) => {
 
 // ─── Error handler ───────────────────────────────────────────────
 app.onError((err, c) => {
-  console.error('Unhandled error:', err);
-  return c.json({ error: 'Internal Server Error' }, 500);
+  console.error(
+    JSON.stringify({
+      message: 'Unhandled request error',
+      error: err instanceof Error ? err.name : 'unknown',
+      method: c.req.method,
+      path: new URL(c.req.url).pathname,
+      cf_ray: c.req.header('CF-Ray') ?? null,
+    }),
+  );
+  return c.json({ error: 'Internal Server Error', code: 'internal_error' }, 500);
 });
 
 // ─── Export for Cloudflare Workers ───────────────────────────────
 export default {
   fetch: app.fetch,
 
-  // Cron trigger handler — Landsbankinn settlement reconciliation
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    console.log('Cron triggered:', event.cron, 'at', new Date().toISOString());
+    console.log(JSON.stringify({ message: 'Reconciliation cron triggered', cron: event.cron }));
     ctx.waitUntil(reconcile(env));
   },
 };

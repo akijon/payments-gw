@@ -4,11 +4,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
-import type { Env } from '../src/types/env';
-
-declare module 'cloudflare:test' {
-  interface ProvidedEnv extends Env {}
-}
 
 vi.mock('../src/lib/verifone', () => ({
   getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
@@ -18,17 +13,22 @@ vi.mock('../src/lib/verifone', () => ({
 }));
 
 beforeEach(async () => {
-  await env.DB.exec('DELETE FROM orders;');
-  await env.DB.exec('DELETE FROM payment_events;');
-  await env.DB.exec('DELETE FROM processed_webhooks;');
+  vi.clearAllMocks();
+  await env.DB.exec(
+    'DELETE FROM checkout_attempts; DELETE FROM order_access_tokens; DELETE FROM payment_events; DELETE FROM processed_webhooks; DELETE FROM orders;',
+  );
+  const { parseCheckoutResult } = await import('../src/lib/verifone');
+  vi.mocked(parseCheckoutResult).mockReturnValue({ status: 'pending' });
 });
 
 async function seedOrder(overrides: Record<string, unknown> = {}) {
   const id = (overrides.id as string) ?? crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, items_json, verifone_checkout_id)
-     VALUES (?, 'IRJA-20260725-TEST', 'checkout_created', 'ISK', 18000, 'test@test.is', '[]', ?)`
-  ).bind(id, overrides.verifone_checkout_id ?? 'chk-return-1').run();
+     VALUES (?, 'IRJA-20260725-TEST', 'checkout_created', 'ISK', 18000, 'test@test.is', '[]', ?)`,
+  )
+    .bind(id, overrides.verifone_checkout_id ?? 'chk-return-1')
+    .run();
   return id;
 }
 
@@ -39,7 +39,7 @@ describe('GET /api/return', () => {
   });
 
   it('returns 404 when order not found', async () => {
-    const resp = await SELF.fetch('https://test.example.com/api/return?order_id=00000000-0000-4000-0000-000000000000');
+    const resp = await SELF.fetch('https://test.example.com/api/return?order_id=00000000-0000-4000-8000-000000000000');
     expect(resp.status).toBe(404);
   });
 
@@ -50,6 +50,9 @@ describe('GET /api/return', () => {
     vi.mocked(getCheckout).mockResolvedValueOnce({
       id: 'chk-return-1',
       status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-TEST',
       transaction_id: 'txn-success-1',
       events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-success-1', timestamp: '2026-07-25T10:00:00Z' }],
     });
@@ -63,13 +66,15 @@ describe('GET /api/return', () => {
       { redirect: 'manual' },
     );
 
-    expect(resp.status).toBe(302);
+    expect(resp.status).toBe(303);
     const location = resp.headers.get('location')!;
     expect(location).toContain('/order/');
     expect(location).toContain('status=paid');
 
     // Verify order was updated in D1
-    const order = await env.DB.prepare('SELECT status, paid_at, verifone_transaction_id FROM orders WHERE id = ?').bind(orderId).first();
+    const order = await env.DB.prepare('SELECT status, paid_at, verifone_transaction_id FROM orders WHERE id = ?')
+      .bind(orderId)
+      .first();
     expect(order!.status).toBe('paid');
     expect(order!.paid_at).not.toBeNull();
     expect(order!.verifone_transaction_id).toBe('txn-success-1');
@@ -82,6 +87,9 @@ describe('GET /api/return', () => {
     vi.mocked(getCheckout).mockResolvedValueOnce({
       id: 'chk-return-1',
       status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-TEST',
       transaction_id: 'different-txn-id',
       events: [],
     });
@@ -91,8 +99,71 @@ describe('GET /api/return', () => {
       { redirect: 'manual' },
     );
 
-    expect(resp.status).toBe(302);
+    expect(resp.status).toBe(303);
     expect(resp.headers.get('location')).toContain('status=error');
+  });
+
+  it('redirects with error status on amount mismatch', async () => {
+    const orderId = await seedOrder();
+
+    const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: 'chk-return-1',
+      status: 'COMPLETED',
+      amount: 1, // does not match order.amount 18000
+      transaction_id: 'txn-amt-1',
+      events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-amt-1', timestamp: '2026-07-25T10:00:00Z' }],
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({
+      status: 'success',
+      transactionId: 'txn-amt-1',
+    });
+
+    const resp = await SELF.fetch(
+      `https://test.example.com/api/return?order_id=${orderId}&transaction_id=txn-amt-1&checkout_id=chk-return-1`,
+      { redirect: 'manual' },
+    );
+
+    expect(resp.status).toBe(303);
+    expect(resp.headers.get('location')).toContain('status=error');
+
+    const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order!.status).toBe('checkout_created');
+  });
+
+  it('redirects with error when client swaps checkout_id', async () => {
+    const orderId = await seedOrder();
+
+    const resp = await SELF.fetch(
+      `https://test.example.com/api/return?order_id=${orderId}&checkout_id=chk-attacker-swapped`,
+      { redirect: 'manual' },
+    );
+
+    expect(resp.status).toBe(303);
+    expect(resp.headers.get('location')).toContain('status=error');
+  });
+
+  it('does not mark paid when the provider currency differs', async () => {
+    const orderId = await seedOrder();
+    const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: 'chk-return-1',
+      status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'EUR',
+      merchant_reference: 'IRJA-20260725-TEST',
+      transaction_id: 'txn-wrong-currency',
+      events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-wrong-currency', timestamp: '2026-07-25T10:00:00Z' }],
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({ status: 'success', transactionId: 'txn-wrong-currency' });
+
+    const resp = await SELF.fetch(`https://test.example.com/api/return?order_id=${orderId}&checkout_id=chk-return-1`, {
+      redirect: 'manual',
+    });
+    expect(resp.status).toBe(303);
+    expect(resp.headers.get('location')).toContain('status=error');
+    const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order?.status).toBe('checkout_created');
   });
 
   it('redirects with failed status on failed transaction', async () => {
@@ -102,6 +173,9 @@ describe('GET /api/return', () => {
     vi.mocked(getCheckout).mockResolvedValueOnce({
       id: 'chk-return-1',
       status: 'FAILED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-TEST',
       transaction_id: 'txn-fail-1',
       events: [{ type: 'TRANSACTION_FAILED', id: 'txn-fail-1', timestamp: '2026-07-25T10:00:00Z' }],
     });
@@ -115,10 +189,51 @@ describe('GET /api/return', () => {
       { redirect: 'manual' },
     );
 
-    expect(resp.status).toBe(302);
+    expect(resp.status).toBe(303);
     expect(resp.headers.get('location')).toContain('status=failed');
 
     const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first();
     expect(order!.status).toBe('failed');
+  });
+
+  it('does not overwrite or duplicate-audit a concurrent webhook transition', async () => {
+    const orderId = await seedOrder();
+    const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockImplementationOnce(async () => {
+      await env.DB.prepare(
+        `UPDATE orders SET status = 'paid', verifone_transaction_id = 'txn-from-webhook',
+         paid_at = datetime('now') WHERE id = ?`,
+      )
+        .bind(orderId)
+        .run();
+      return {
+        id: 'chk-return-1',
+        status: 'COMPLETED',
+        amount: 18000,
+        currency_code: 'ISK',
+        merchant_reference: 'IRJA-20260725-TEST',
+        transaction_id: 'txn-success-race',
+        events: [],
+      };
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({ status: 'success', transactionId: 'txn-success-race' });
+
+    const response = await SELF.fetch(
+      `https://test.example.com/api/return?order_id=${orderId}&checkout_id=chk-return-1`,
+      { redirect: 'manual' },
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toContain('status=paid');
+    const order = await env.DB.prepare('SELECT status, verifone_transaction_id FROM orders WHERE id = ?')
+      .bind(orderId)
+      .first<{ status: string; verifone_transaction_id: string }>();
+    expect(order).toEqual({ status: 'paid', verifone_transaction_id: 'txn-from-webhook' });
+    const returnEvents = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM payment_events WHERE order_id = ? AND source = 'verifone_return'",
+    )
+      .bind(orderId)
+      .first<{ count: number }>();
+    expect(returnEvents?.count).toBe(0);
   });
 });

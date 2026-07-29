@@ -14,6 +14,11 @@ interface CachedToken {
 
 const TOKEN_KEY = 'verifone_oauth_token';
 const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
+const UPSTREAM_TIMEOUT_MS = 15_000;
+
+function upstreamError(operation: string, response: Response): Error {
+  return new Error(`${operation} failed with HTTP ${response.status}`);
+}
 
 export async function getVerifoneToken(env: Env): Promise<string> {
   // 1. Check KV cache
@@ -32,22 +37,31 @@ export async function getVerifoneToken(env: Env): Promise<string> {
       client_secret: env.VERIFONE_CLIENT_SECRET,
       scope: env.VERIFONE_SCOPE,
     }),
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
   });
 
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Verifone OAuth2 failed (${resp.status}): ${text}`);
+    throw upstreamError('Verifone OAuth2', resp);
   }
 
-  const data = await resp.json() as { access_token: string; expires_in: number };
+  const data = (await resp.json()) as { access_token?: unknown; expires_in?: unknown };
+  if (
+    typeof data.access_token !== 'string' ||
+    data.access_token.length === 0 ||
+    typeof data.expires_in !== 'number' ||
+    !Number.isFinite(data.expires_in) ||
+    data.expires_in <= 30
+  ) {
+    throw new Error('Verifone OAuth2 returned an invalid token response');
+  }
   const token: CachedToken = {
     token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in * 1000) - TOKEN_BUFFER_MS,
+    expiresAt: Date.now() + data.expires_in * 1000,
   };
 
   // 3. Cache in KV with TTL
   await env.CACHE.put(TOKEN_KEY, JSON.stringify(token), {
-    expirationTtl: Math.floor((data.expires_in * 1000 - TOKEN_BUFFER_MS) / 1000),
+    expirationTtl: Math.max(60, Math.floor(data.expires_in - TOKEN_BUFFER_MS / 1000)),
   });
 
   return token.token;
@@ -55,12 +69,18 @@ export async function getVerifoneToken(env: Env): Promise<string> {
 
 // ─── Create checkout session ────────────────────────────────────
 
-export async function createCheckout(env: Env, params: {
-  orderNumber: string;
-  amount: number;       // minor units
-  currency: string;     // "ISK"
-  returnUrl: string;
-}): Promise<{ checkoutId: string; checkoutUrl: string }> {
+export async function createCheckout(
+  env: Env,
+  params: {
+    orderNumber: string;
+    amount: number; // minor units
+    currency: string; // "ISK"
+    returnUrl: string;
+  },
+): Promise<{ checkoutId: string; checkoutUrl: string }> {
+  if (!Number.isSafeInteger(params.amount) || params.amount <= 0 || !/^[A-Z]{3}$/.test(params.currency)) {
+    throw new Error('Invalid checkout amount or currency');
+  }
   const token = await getVerifoneToken(env);
 
   const body = {
@@ -86,41 +106,59 @@ export async function createCheckout(env: Env, params: {
   const resp = await fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'Accept': '*/*',
+      Accept: '*/*',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
   });
 
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Verifone createCheckout failed (${resp.status}): ${text}`);
+    throw upstreamError('Verifone createCheckout', resp);
   }
 
-  const data = await resp.json() as VerifoneCheckoutResponse;
+  const data = (await resp.json()) as VerifoneCheckoutResponse;
+  let checkoutUrl: URL;
+  try {
+    checkoutUrl = new URL(data.url);
+  } catch {
+    throw new Error('Verifone createCheckout returned an invalid URL');
+  }
+  if (
+    typeof data.id !== 'string' ||
+    data.id.length === 0 ||
+    data.id.length > 256 ||
+    checkoutUrl.protocol !== 'https:' ||
+    data.url.length > 2048
+  ) {
+    throw new Error('Verifone createCheckout returned an invalid response');
+  }
   return { checkoutId: data.id, checkoutUrl: data.url };
 }
 
 // ─── Read checkout (verify payment) ─────────────────────────────
 
 export async function getCheckout(env: Env, checkoutId: string): Promise<VerifoneCheckoutDetail> {
+  if (!/^[A-Za-z0-9._:-]{1,256}$/.test(checkoutId)) {
+    throw new Error('Invalid Verifone checkout ID');
+  }
   const token = await getVerifoneToken(env);
 
-  const resp = await fetch(`${env.VERIFONE_API_BASE}/v2/checkout/${checkoutId}`, {
+  const resp = await fetch(`${env.VERIFONE_API_BASE}/v2/checkout/${encodeURIComponent(checkoutId)}`, {
     method: 'GET',
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Accept': '*/*',
+      Authorization: `Bearer ${token}`,
+      Accept: '*/*',
     },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
   });
 
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Verifone getCheckout failed (${resp.status}): ${text}`);
+    throw upstreamError('Verifone getCheckout', resp);
   }
 
-  return await resp.json() as VerifoneCheckoutDetail;
+  return (await resp.json()) as VerifoneCheckoutDetail;
 }
 
 // ─── Extract payment status from checkout ────────────────────────

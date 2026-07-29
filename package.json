@@ -5,26 +5,55 @@
   "description": "Irja payments gateway — Verifone HPP checkout + Landsbankinn reconciliation on Cloudflare Workers",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run deploy:sandbox",
+    "deploy:sandbox": "wrangler deploy",
+    "deploy:production": "./scripts/deploy-production.sh",
     "deploy:check": "./scripts/setup-api-token.sh",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "db:migrate:local": "wrangler d1 execute irja-payments --file=migrations/0001_init.sql --local",
-    "db:migrate:prod": "wrangler d1 execute irja-payments --file=migrations/0001_init.sql --remote",
-    "db:query:local": "wrangler d1 execute irja-payments --local --command",
+    "test": "./scripts/with-agent-safe-env.sh vitest run",
+    "test:watch": "./scripts/with-agent-safe-env.sh vitest",
+    "test:coverage": "./scripts/with-agent-safe-env.sh vitest run --coverage",
+    "db:migrate:local": "./scripts/with-agent-safe-env.sh wrangler d1 migrations apply irja-payments --local",
+    "db:migrate:sandbox": "wrangler d1 migrations apply irja-payments --remote",
+    "db:migrate:production": "./scripts/migrate-production.sh",
+    "db:migrate:prod": "npm run db:migrate:production",
+    "db:query:local": "./scripts/with-agent-safe-env.sh wrangler d1 execute irja-payments --local --command",
     "db:query:prod": "wrangler d1 execute irja-payments --remote --command",
     "secrets:setup": "./scripts/setup-secrets.sh",
-    "lint": "tsc --noEmit",
-    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'"
+    "typecheck": "./scripts/with-agent-safe-env.sh tsc --noEmit",
+    "lint": "./scripts/with-agent-safe-env.sh eslint src test scripts vitest.config.mts",
+    "format": "npm run format:write",
+    "format:write": "prettier --write 'src/**/*.ts' 'test/**/*.ts' 'scripts/**/*.js' '.github/**/*.{yml,yaml}' 'docs/**/*.md' '*.{json,md,mjs,mts}'",
+    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts' 'scripts/**/*.js' '.github/**/*.{yml,yaml}' 'docs/**/*.md' '*.{json,md,mjs,mts}'",
+    "test:quality-gates": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/",
+    "test:security-regression": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/security-regression.test.ts",
+    "test:financial-integrity": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/financial-integrity.test.ts",
+    "quality:dashboard": "node scripts/quality-dashboard.js",
+    "quality:check": "node scripts/quality-dashboard.js",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,mts,mjs,js}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "*.{json,yml,yaml,md}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "hono": "^4.6.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.8",
-    "@cloudflare/workers-types": "^4.20241218.0",
+    "@cloudflare/workers-types": "^5.20260728.1",
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-istanbul": "^4.1.10",
+    "eslint": "^10.8.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.6",
+    "prettier": "^3.9.6",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10",
     "wrangler": "^4.114.0"
   }

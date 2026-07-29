@@ -2,7 +2,7 @@
 
 name = "irja-payments-gw"
 main = "src/index.ts"
-compatibility_date = "2024-12-18"
+compatibility_date = "2026-07-28"
 compatibility_flags = ["nodejs_compat"]
 
 # ─── Environment Variables (non-secret) ──────────────────────────

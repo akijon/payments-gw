@@ -1,0 +1,38 @@
+#:schema node_modules/wrangler/config-schema.json
+
+# Copy to wrangler.production.toml, replace every REPLACE_ME value using the
+# dedicated production Cloudflare resources, then keep the copied file local.
+# Do not reuse sandbox D1/KV namespaces for real payment data.
+name = "irja-payments-gw-prod"
+main = "src/index.ts"
+compatibility_date = "2026-07-28"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+STOREFRONT_URL = "https://irja.is"
+PUBLIC_API_URL = "REPLACE_ME_PUBLIC_WORKER_ORIGIN"
+VERIFONE_API_BASE = "https://emea.gsc.verifone.cloud/oidc/checkout-service"
+VERIFONE_OAUTH_URL = "https://emea.vam.verifone.cloud/oauth2/realms/root/realms/VerifoneServices/access_token"
+LANDSBANKINN_API_BASE = "https://api.landsbankinn.is/api/Acquiring/Acquiring/v1"
+LANDSBANKINN_OAUTH_URL = "https://api.landsbankinn.is/oauth2/access_token"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "REPLACE_ME_PRODUCTION_D1_DATABASE_NAME"
+database_id = "REPLACE_ME_PRODUCTION_D1_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "REPLACE_ME_PRODUCTION_KV_NAMESPACE_ID"
+
+[[ratelimits]]
+binding = "CHECKOUT_RATE_LIMITER"
+namespace_id = "REPLACE_ME_PRODUCTION_RATE_LIMIT_NAMESPACE_ID"
+simple = { limit = 10, period = 60 }
+
+[triggers]
+crons = ["0 6 * * *"]
+
+[observability]
+enabled = true

@@ -1,0 +1,17 @@
+# Verifone API Credentials (sandbox — replace with production for go-live)
+VERIFONE_CLIENT_ID="sandbox-client-id-placeholder"
+VERIFONE_CLIENT_SECRET="sandbox-client-secret-placeholder"
+VERIFONE_SCOPE="checkout"
+VERIFONE_ENTITY_ID="sandbox-entity-id-placeholder"
+VERIFONE_PAYMENT_CONTRACT_ID="sandbox-payment-contract-placeholder"
+VERIFONE_3DS_CONTRACT_ID="sandbox-3ds-contract-placeholder"
+VERIFONE_JWKS_URL="https://vf11gtostorage1.blob.core.windows.net/test-webhook-sign-keys/test-webhook-sign-keys.jwks"
+
+# Landsbankinn Acquiring API (reconciliation — can be deferred)
+LANDSBANKINN_CLIENT_ID="sandbox-placeholder"
+LANDSBANKINN_CLIENT_SECRET="sandbox-placeholder"
+LANDSBANKINN_SCOPE="acquiring"
+
+# Environment
+ENVIRONMENT="sandbox"
+STOREFRONT_URL="https://irja.khalipa.net"

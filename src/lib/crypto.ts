@@ -1,105 +1,117 @@
 /**
- * Cryptographic helpers — JWS verification for Verifone webhooks
+ * Verifone webhook JWS verification.
  *
- * Verifone uses JWS (JSON Web Signature) with JWKS for webhook verification:
- * 1. Canonicalize JSON body per RFC 8785
- * 2. Parse JWS header to extract kid
- * 3. Find matching key in JWKS by kid
- * 4. Verify signature using Web Crypto API (RS256)
+ * Verifone signs RFC 8785 canonical JSON using RFC 7797 detached JWS with an
+ * unencoded payload. The protected header must therefore explicitly declare
+ * `b64: false` and list `b64` in `crit`.
  */
 
 import type { Env } from '../types/env';
 import { getJwks, refreshJwks } from './jwks';
 
+interface ProtectedHeader {
+  kid?: unknown;
+  alg?: unknown;
+  b64?: unknown;
+  crit?: unknown;
+}
+
+function base64UrlDecode(input: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/.test(input)) {
+    throw new Error('Invalid base64url input');
+  }
+
+  const padded = input.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (input.length % 4)) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function decodeProtectedHeader(encodedHeader: string): ProtectedHeader {
+  const decoded = new TextDecoder().decode(base64UrlDecode(encodedHeader));
+  return JSON.parse(decoded) as ProtectedHeader;
+}
+
+function isExpectedDetachedHeader(header: ProtectedHeader): header is {
+  kid: string;
+  alg: 'RS256';
+  b64: false;
+  crit: unknown[];
+} {
+  return (
+    typeof header.kid === 'string' &&
+    header.kid.length > 0 &&
+    header.alg === 'RS256' &&
+    header.b64 === false &&
+    Array.isArray(header.crit) &&
+    header.crit.length === 1 &&
+    header.crit[0] === 'b64'
+  );
+}
+
+function isUsableRsaSigningKey(key: JsonWebKey & { kid?: string }): boolean {
+  return (
+    key.kty === 'RSA' &&
+    typeof key.n === 'string' &&
+    typeof key.e === 'string' &&
+    (key.use === undefined || key.use === 'sig') &&
+    (key.alg === undefined || key.alg === 'RS256')
+  );
+}
+
 /**
- * Verify a Verifone webhook signature
+ * Verify an RFC 7797 detached JWS from Verifone.
  *
- * @param rawBody - The raw HTTP request body (string)
- * @param jwsHeader - The x-vfi-jws header value (compact JWS serialization)
- * @param env - Worker environment for JWKS refresh
- * @returns true if signature is valid, false otherwise
+ * The compact serialization has an empty payload segment (`header..signature`)
+ * and signs `BASE64URL(header) + "." + canonicalized JSON` without base64url
+ * encoding the payload.
  */
-export async function verifyVerifoneWebhook(
-  rawBody: string,
-  jwsHeader: string,
-  env: Env,
-): Promise<boolean> {
-  // 1. Parse JWS header to extract kid
+export async function verifyVerifoneWebhook(rawBody: string, jwsHeader: string, env: Env): Promise<boolean> {
   const parts = jwsHeader.split('.');
-  if (parts.length !== 3) {
-    console.error('Invalid JWS format: expected 3 parts, got', parts.length);
+  if (parts.length !== 3 || parts[1] !== '' || !parts[0] || !parts[2]) {
     return false;
   }
 
-  let jwsHeaderObj: { kid?: string; alg?: string };
+  let protectedHeader: ProtectedHeader;
+  let canonicalized: string;
   try {
-    jwsHeaderObj = JSON.parse(atob(parts[0]));
+    protectedHeader = decodeProtectedHeader(parts[0]);
+    canonicalized = canonicalizeJson(rawBody);
   } catch {
-    console.error('Failed to parse JWS header');
     return false;
   }
 
-  const kid = jwsHeaderObj.kid;
-  const alg = jwsHeaderObj.alg;
-
-  if (!kid || alg !== 'RS256') {
-    console.error('Unsupported JWS: kid or alg missing/wrong', { kid, alg });
+  if (!isExpectedDetachedHeader(protectedHeader)) {
     return false;
   }
 
-  // 2. Canonicalize JSON body per RFC 8785
-  const canonicalized = canonicalizeJson(rawBody);
-
-  // 3. Find matching key in JWKS
   let keys = await getJwks(env);
-  let key = keys.find((k) => k.kid === kid);
-
-  // 4. If key not found, refresh JWKS and retry
+  let key = keys.find((candidate) => candidate.kid === protectedHeader.kid);
   if (!key) {
-    console.log('Key not found in JWKS, refreshing...');
     keys = await refreshJwks(env);
-    key = keys.find((k) => k.kid === kid);
-    if (!key) {
-      console.error('Key not found after JWKS refresh:', kid);
-      return false;
-    }
+    key = keys.find((candidate) => candidate.kid === protectedHeader.kid);
   }
 
-  // 5. Import the public key and verify signature
+  if (!key || !isUsableRsaSigningKey(key)) {
+    return false;
+  }
+
   try {
-    const cryptoKey = await crypto.subtle.importKey(
-      'jwk',
-      key,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['verify'],
-    );
-
-    // For JWS with detached payload, the payload is the canonicalized body
-    // Reconstruct the signed data: header + "." + base64url(canonicalized_body)
-    const signedData = `${parts[0]}.${base64UrlEncode(canonicalized)}`;
-
+    const cryptoKey = await crypto.subtle.importKey('jwk', key, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, [
+      'verify',
+    ]);
+    const signedData = new TextEncoder().encode(`${parts[0]}.${canonicalized}`);
     const signature = base64UrlDecode(parts[2]);
 
-    const isValid = await crypto.subtle.verify(
-      'RSASSA-PKCS1-v1_5',
-      cryptoKey,
-      signature,
-      new TextEncoder().encode(signedData),
-    );
-
-    return isValid;
-  } catch (err) {
-    console.error('JWS verification failed:', err);
+    return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, signature, signedData);
+  } catch {
     return false;
   }
 }
 
 /**
- * Canonicalize JSON per RFC 8785 (JCS — JSON Canonicalization Scheme)
- *
- * This is a simplified implementation. For production, consider using
- * a library like 'canonicalize' or the full RFC 8785 spec.
+ * RFC 8785 JCS canonicalization for JSON values representable in JavaScript.
+ * JSON.stringify supplies ECMAScript number/string serialization; recursively
+ * sorting object keys produces JCS property ordering (UTF-16 code units).
  */
 function canonicalizeJson(input: string): string {
   const parsed = JSON.parse(input);
@@ -107,40 +119,19 @@ function canonicalizeJson(input: string): string {
 }
 
 function canonicalizeValue(value: unknown): unknown {
-  if (value === null) return null;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') return value;
+  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+    return value;
+  }
   if (Array.isArray(value)) {
     return value.map(canonicalizeValue);
   }
   if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const sortedKeys = Object.keys(obj).sort();
-    const result: Record<string, unknown> = {};
-    for (const key of sortedKeys) {
-      result[key] = canonicalizeValue(obj[key]);
+    const object = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(object).sort()) {
+      sorted[key] = canonicalizeValue(object[key]);
     }
-    return result;
+    return sorted;
   }
-  return value;
-}
-
-function base64UrlEncode(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function base64UrlDecode(input: string): ArrayBuffer {
-  const padded = input.replace(/-/g, '+').replace(/_/g, '/');
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
+  throw new Error('Unsupported JSON value');
 }
