@@ -12,23 +12,23 @@
 
 ## Safety Net Map
 
-| Module | Pinned behaviors | Test files | Gaps |
-| --- | --- | --- | --- |
-| `src/routes/checkout.ts` | Body limit, reject client money fields, catalog resolve, idempotency key claim, order + access token issue | `test/checkout.test.ts`, `test/price-manipulation.test.ts` | High-concurrency claim races |
-| `src/routes/return.ts` | S2S checkout verify, amount/currency match, non-regressing status | `test/return.test.ts` | Provider session-expiry windows |
-| `src/routes/webhook.ts` | JWS verify, entity match, idempotent event id, paid/fail/refund paths | `test/webhook.test.ts` | JWKS rotation; true multi-isolate duplicate delivery |
-| `src/routes/order.ts` | Bearer capability token, no sensitive fields | `test/order.test.ts` | Per-token rate limit (if productized) |
-| `src/cron/reconcile.ts` | Match approved acquirer txns; refuse amount/status mismatch; failed run cursor | `test/reconcile.test.ts` | Large pagination / multi-day catch-up |
-| `src/lib/catalog.ts` | Server-side unit prices, active products only | `test/price-manipulation.test.ts`, financial gates | Catalog admin/update path N/A today |
-| `src/lib/crypto.ts` | Detached JWS verify path used by webhooks | `test/crypto.test.ts` | Non-ES algorithms if vendor ever changes |
-| `src/lib/jwks.ts` | Fetch + KV cache by kid | `test/jwks.test.ts` | Stale kid after rotation without cache bust |
-| `src/lib/verifone.ts` | Token + create/read checkout parsing | `test/verifone.test.ts` | OAuth refresh under network error; **no fetch timeout pin yet** |
-| `src/lib/landsbankinn.ts` | Token + settlements/transactions read | `test/landsbankinn.test.ts` | Error body edge cases; **no fetch timeout pin yet** |
-| `src/lib/rate-limit.ts` | Checkout limiter binding gate | `test/rate-limit.test.ts` | Missing binding behavior in every env |
-| `src/lib/payment-integrity.ts` | Amount/currency integrity codes | `test/quality-gates/financial-integrity.test.ts` | Partial capture / multi-currency if ever added |
-| `src/lib/db.ts` | Order/token/idempotency helpers, event log | Exercised via route/reconcile tests | Few direct unit tests |
-| `src/lib/http.ts` | Body size reader helpers | Via checkout tests | Standalone unit coverage thin |
-| `src/index.ts` | Router mount, shallow `/health`, `onError` | Indirect via `SELF` | Deep health not implemented |
+| Module                         | Pinned behaviors                                                                                           | Test files                                                 | Gaps                                                              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------- |
+| `src/routes/checkout.ts`       | Body limit, reject client money fields, catalog resolve, idempotency key claim, order + access token issue | `test/checkout.test.ts`, `test/price-manipulation.test.ts` | High-concurrency claim races                                      |
+| `src/routes/return.ts`         | S2S checkout verify, amount/currency match, non-regressing status                                          | `test/return.test.ts`                                      | Provider session-expiry windows                                   |
+| `src/routes/webhook.ts`        | JWS verify, entity match, idempotent event id, paid/fail/refund paths                                      | `test/webhook.test.ts`                                     | JWKS rotation; true multi-isolate duplicate delivery              |
+| `src/routes/order.ts`          | Bearer capability token, no sensitive fields                                                               | `test/order.test.ts`                                       | Per-token rate limit (if productized)                             |
+| `src/cron/reconcile.ts`        | Match approved acquirer txns; refuse amount/status mismatch; failed run cursor                             | `test/reconcile.test.ts`                                   | Large pagination / multi-day catch-up                             |
+| `src/lib/catalog.ts`           | Server-side unit prices, active products only                                                              | `test/price-manipulation.test.ts`, financial gates         | Catalog admin/update path N/A today                               |
+| `src/lib/crypto.ts`            | Detached JWS verify path used by webhooks                                                                  | `test/crypto.test.ts`                                      | Non-ES algorithms if vendor ever changes                          |
+| `src/lib/jwks.ts`              | Fetch + KV cache by kid                                                                                    | `test/jwks.test.ts`                                        | Stale kid after rotation without cache bust                       |
+| `src/lib/verifone.ts`          | Token + create/read checkout parsing (15s `AbortSignal.timeout`)                                           | `test/verifone.test.ts`                                    | OAuth refresh under network error; timeout-abort characterization |
+| `src/lib/landsbankinn.ts`      | Token + settlements/transactions read (10s `AbortSignal.timeout`)                                          | `test/landsbankinn.test.ts`                                | Error body edge cases; timeout-abort characterization             |
+| `src/lib/rate-limit.ts`        | Checkout limiter binding gate                                                                              | `test/rate-limit.test.ts`                                  | Missing binding behavior in every env                             |
+| `src/lib/payment-integrity.ts` | Amount/currency integrity codes                                                                            | `test/quality-gates/financial-integrity.test.ts`           | Partial capture / multi-currency if ever added                    |
+| `src/lib/db.ts`                | Order/token/idempotency helpers, event log                                                                 | Exercised via route/reconcile tests                        | Few direct unit tests                                             |
+| `src/lib/http.ts`              | Body size reader helpers                                                                                   | Via checkout tests                                         | Standalone unit coverage thin                                     |
+| `src/index.ts`                 | Router mount, shallow `/health`, `onError`                                                                 | Indirect via `SELF`                                        | Deep health not implemented                                       |
 
 Gaps column entries are **not** pinned — Phase 1 GATE remains open until prioritized characterization items land.
 

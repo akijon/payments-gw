@@ -2,33 +2,36 @@
 
 ## Integration-Point Audit
 
-Values marked **unimplemented** are targets from the quality plan, not live code behavior. Verify in `src/lib/*.ts` before treating as ops truth.
+Verified against source (`src/lib/verifone.ts`, `landsbankinn.ts`, `jwks.ts`).
 
-| Dependency | Timeout today | Circuit breaker | Isolation | Retry today | Status |
-| --- | --- | --- | --- | --- | --- |
-| Verifone Checkout API | **None** (`fetch` bare) | None | Worker isolate | None explicit | **Gap — Phase 7** |
-| Verifone OAuth | **None** | None | KV token cache | None explicit | **Gap — Phase 7** |
-| Verifone JWKS | **None** | N/A | KV cache | Falls back only if coded path allows cached key | Partial (cache); timeout gap |
-| Landsbankinn Acquiring API | **None** | None | Cron handler | None explicit | **Gap — Phase 7** |
-| D1 | Platform | Platform | Binding | Platform | Rely on CF |
-| KV | Platform | Platform | Binding | Platform | Rely on CF |
+| Dependency                 | Timeout (code)                  | Circuit breaker | Isolation                                          | Retry (code)                        | Status                                   |
+| -------------------------- | ------------------------------- | --------------- | -------------------------------------------------- | ----------------------------------- | ---------------------------------------- |
+| Verifone Checkout API      | **15s** (`AbortSignal.timeout`) | None            | Worker isolate                                     | None explicit                       | Timeout ✓; breaker/retry — Phase 7       |
+| Verifone OAuth             | **15s** (`AbortSignal.timeout`) | None            | KV token cache (30s buffer)                        | None explicit                       | Timeout ✓; breaker/retry — Phase 7       |
+| Verifone JWKS              | **5s** (`AbortSignal.timeout`)  | N/A             | KV + memory cache (1h TTL); refresh on missing kid | Falls back to KV on refresh failure | Timeout ✓; no retry needed (cache-first) |
+| Landsbankinn Acquiring API | **10s** (`AbortSignal.timeout`) | None            | Cron handler (isolated)                            | None explicit                       | Timeout ✓; breaker/retry — Phase 7       |
+| Verifone JWKS response     | Capped at **256KB**             | —               | —                                                  | —                                   | ✓                                        |
+| Landsbankinn response      | Capped at **1MB**               | —               | —                                                  | —                                   | ✓                                        |
+| D1                         | Platform                        | Platform        | Binding                                            | Platform                            | Rely on CF                               |
+| KV                         | Platform                        | Platform        | Binding                                            | Platform                            | Rely on CF                               |
 
-### Target policy (Phase 7 — not implemented)
+### What remains for Phase 7
 
-| Dependency | Timeout target | Retry target | Notes |
-| --- | --- | --- | --- |
-| Verifone OAuth / GET checkout | ~3–5s abort | Bounded + jitter on safe GETs | Do not infinite-retry |
-| Verifone POST checkout | ~5–10s abort | Prefer client Idempotency-Key; avoid duplicate session create | Align with checkout attempt rows |
-| Landsbankinn GETs | ~10–15s abort | Bounded + jitter | Cron can lengthen deadline carefully |
-| JWKS GET | ~3–5s abort | Use KV cache on failure when unexpired entry exists | Rotation must still be testable |
+| Item                        | Current                                                 | Target                                                                                     |
+| --------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Circuit breaker             | None                                                    | Lightweight KV-backed or in-isolate breaker for Verifone/Landsbankinn failure cascades     |
+| Retry with backoff + jitter | None                                                    | Bounded retry on idempotent GETs (checkout read, settlements) only; never blind POST retry |
+| Deep health check           | Shallow only (`/health` → 200)                          | `/health?deep=1` → D1 `SELECT 1` + KV probe, JSON breakdown                                |
+| Correlation IDs             | Partial (`order_id`, `event_id`, `run_id` in some logs) | Standardize across all structured logs                                                     |
 
 ---
 
 ## Query & Resource Findings
 
 - Checkout path is request-scoped; no unbounded list APIs on the public surface.
+- **Missing index:** `reconcile.ts` queries `WHERE order_number = ?` but `migrations/` has no index on `orders(order_number)`. Full table scan per settlement transaction. (Fix: add `CREATE INDEX idx_orders_order_number ON orders(order_number)` in a new migration.)
 - Reconcile must not load unbounded settlement pages without a cursor/limit strategy (characterization backlog).
-- Rate limit: checkout uses CF rate-limit binding when configured; missing binding must fail closed in non-dev (see `rate-limit` tests/docs).
+- Rate limit: checkout uses CF rate-limit binding when configured; missing binding fails closed in production (see `src/lib/rate-limit.ts`).
 
 ---
 
@@ -46,8 +49,8 @@ Values marked **unimplemented** are targets from the quality plan, not live code
 
 ### Logging
 
-- Prefer structured JSON with `order_id` / `event_id` / `run_id` / `environment`.
-- Never log access tokens, raw Idempotency-Key secrets beyond hashed forms already stored, or card data (N/A by design).
+- Structured JSON with `order_id` / `event_id` / `run_id` / `environment` (partially implemented).
+- Never log access tokens, raw Idempotency-Key secrets beyond hashed forms, or card data (N/A by design).
 
 ### Metrics / alerts (when ops wiring exists)
 
@@ -60,4 +63,4 @@ Values marked **unimplemented** are targets from the quality plan, not live code
 - Local board: `npm run quality:check` (lint, types, format, tests, audit, dry-run build).
 - Production remains **BLOCKED** by externals in `DEPLOYMENT_GATE.md` even when local is green.
 - Deploy/migrate scripts fail closed without `CONFIRM_PRODUCTION_*` and real resource IDs.
-- Decouple “Worker version live” from “storefront points at Verifone contract” — storefront cutover is a separate external gate.
+- Decouple "Worker version live" from "storefront points at Verifone contract" — storefront cutover is a separate external gate.
