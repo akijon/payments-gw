@@ -420,12 +420,19 @@ export interface AtomicReturnTransition {
 
 /** Apply a verified browser-return transition and its audit event atomically. */
 export async function processReturnAtomically(db: D1Database, input: AtomicReturnTransition): Promise<boolean> {
+  // 'paid' includes 'failed' so a verified success can recover an order that a
+  // prior unverified/incorrect failure transition already marked failed —
+  // mirrors the webhook path in applyWebhookTransition above.
+  const allowedFrom =
+    input.status === 'paid'
+      ? "status IN ('pending', 'checkout_created', 'payment_pending', 'failed')"
+      : "status IN ('pending', 'checkout_created', 'payment_pending')";
   const update = db
     .prepare(
       `UPDATE orders SET status = ?, updated_at = datetime('now'),
        paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE paid_at END,
        verifone_transaction_id = COALESCE(?, verifone_transaction_id)
-     WHERE id = ? AND status IN ('pending', 'checkout_created', 'payment_pending')`,
+     WHERE id = ? AND ${allowedFrom}`,
     )
     .bind(input.status, input.status, input.transactionId ?? null, input.orderId);
   const event = db
@@ -453,4 +460,179 @@ export function generateOrderNumber(): string {
     .join('')
     .toUpperCase();
   return `IRJA-${date}-${random}`;
+}
+
+// ─── Reconciliation queries ──────────────────────────────────────
+
+export interface ReconciliationOrder {
+  id: string;
+  status: string;
+  amount: number;
+  currency: string;
+  verifone_transaction_id: string | null;
+  landsbankinn_settlement_id: string | null;
+}
+
+export async function getLastCompletedReconciliationDateTo(db: D1Database): Promise<string | null> {
+  const row = await db
+    .prepare(`SELECT date_to FROM reconciliation_runs WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 1`)
+    .first<{ date_to: string }>();
+  return row?.date_to ?? null;
+}
+
+export async function startReconciliationRun(
+  db: D1Database,
+  params: { id: string; startedAt: string; dateFrom: string; dateTo: string },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO reconciliation_runs (id, started_at, date_from, date_to, status)
+       VALUES (?, ?, ?, ?, 'running')`,
+    )
+    .bind(params.id, params.startedAt, params.dateFrom, params.dateTo)
+    .run();
+}
+
+export async function completeReconciliationRun(
+  db: D1Database,
+  params: {
+    runId: string;
+    completedAt: string;
+    settlementsProcessed: number;
+    transactionsMatched: number;
+    transactionsUnmatched: number;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE reconciliation_runs
+         SET status = 'completed', completed_at = ?, settlements_processed = ?,
+             transactions_matched = ?, transactions_unmatched = ?
+         WHERE id = ? AND status = 'running'`,
+    )
+    .bind(
+      params.completedAt,
+      params.settlementsProcessed,
+      params.transactionsMatched,
+      params.transactionsUnmatched,
+      params.runId,
+    )
+    .run();
+}
+
+export async function failReconciliationRun(
+  db: D1Database,
+  params: { runId: string; completedAt: string; errorName: string },
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE reconciliation_runs
+         SET status = 'failed', completed_at = ?, error_name = ?
+         WHERE id = ? AND status = 'running'`,
+    )
+    .bind(params.completedAt, params.errorName, params.runId)
+    .run();
+}
+
+export async function recordSettlementBatch(
+  db: D1Database,
+  settlement: { id: string; settlementDate: string; totalAmount: number; currency: string; transactionCount: number },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO settlements (
+        id, settlement_date, total_amount, currency, transaction_count, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      settlement.id,
+      settlement.settlementDate,
+      settlement.totalAmount,
+      settlement.currency,
+      settlement.transactionCount,
+      JSON.stringify(settlement),
+    )
+    .run();
+}
+
+export async function recordReconciliationException(
+  db: D1Database,
+  input: {
+    runId: string;
+    settlementId: string;
+    transactionId: string;
+    orderId?: string;
+    reason: string;
+    details: Record<string, unknown>;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO reconciliation_exceptions
+       (id, run_id, settlement_id, transaction_id, order_id, reason, details_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      generateUUID(),
+      input.runId,
+      input.settlementId,
+      input.transactionId,
+      input.orderId ?? null,
+      input.reason,
+      JSON.stringify(input.details),
+    )
+    .run();
+}
+
+export async function getOrderByOrderNumber(db: D1Database, orderNumber: string): Promise<ReconciliationOrder | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, status, amount, currency, verifone_transaction_id, landsbankinn_settlement_id
+       FROM orders WHERE order_number = ?`,
+    )
+    .bind(orderNumber)
+    .first<ReconciliationOrder>();
+  return row ?? null;
+}
+
+/** Conditionally transition a verified `paid` order to `settled` and log the audit
+ *  event in one D1 batch. Returns whether this call performed the transition. */
+export async function settleOrderAtomically(
+  db: D1Database,
+  params: {
+    orderId: string;
+    settlementId: string;
+    settledAt: string;
+    transactionAmount: number;
+    transactionCurrency: string;
+    auditPayload: string;
+  },
+): Promise<boolean> {
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE orders
+         SET status = 'settled', landsbankinn_settlement_id = ?,
+             settled_at = ?, updated_at = datetime('now')
+         WHERE id = ? AND status = 'paid' AND amount = ? AND currency = ?
+           AND verifone_transaction_id IS NOT NULL`,
+      )
+      .bind(
+        params.settlementId,
+        params.settledAt,
+        params.orderId,
+        params.transactionAmount,
+        params.transactionCurrency,
+      ),
+    db
+      .prepare(
+        `INSERT INTO payment_events (
+          id, order_id, event_type, source, raw_payload, verified
+        )
+         SELECT ?, ?, 'settlement_matched', 'landsbankinn_api', ?, 1
+         WHERE changes() = 1`,
+      )
+      .bind(generateUUID(), params.orderId, params.auditPayload),
+  ]);
+  return (results[0].meta.changes ?? 0) === 1;
 }

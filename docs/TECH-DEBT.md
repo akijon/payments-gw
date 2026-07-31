@@ -2,24 +2,24 @@
 
 ## Debt Ledger
 
-| Item                                      | Location                                            | Type             | Risk   | Effort | Priority | Status              |
-| ----------------------------------------- | --------------------------------------------------- | ---------------- | ------ | ------ | -------- | ------------------- |
-| Duplicated payment verification logic     | `src/routes/return.ts`, `src/routes/webhook.ts`     | Code Duplication | Medium | Low    | High     | Planned (Phase 3)   |
-| Direct D1 calls in route handlers         | `src/routes/checkout.ts`, `return.ts`, `webhook.ts` | Architecture     | Medium | Medium | High     | Planned (Phase 4/5) |
-| String literal error codes                | `src/lib/payment-integrity.ts`, routes              | Maintainability  | Low    | Low    | Medium   | Planned (Phase 2)   |
-| Lack of circuit breaker for external APIs | `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`    | Resilience       | High   | Medium | High     | Planned (Phase 7)   |
-| Static `/health` endpoint                 | `src/index.ts`                                      | Operational      | Low    | Low    | Medium   | Planned (Phase 7)   |
+| Item                                      | Location                                            | Type             | Risk   | Effort | Priority | Status                                                                                                                                                           |
+| ----------------------------------------- | --------------------------------------------------- | ---------------- | ------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Duplicated payment verification logic     | `src/routes/return.ts`, `src/routes/webhook.ts`     | Code Duplication | Medium | Low    | High     | Resolved — shared `assertCheckoutIntegrity` (`src/lib/payment-integrity.ts`), called from `src/usecases/process-return.ts` and `src/usecases/process-webhook.ts` |
+| Direct D1 calls in route handlers         | `src/routes/checkout.ts`, `return.ts`, `webhook.ts` | Architecture     | Medium | Medium | High     | Resolved — routes are thin adapters over `src/usecases/*`; all D1 access lives in `src/lib/db.ts`                                                                |
+| String literal error codes                | `src/lib/payment-integrity.ts`, routes              | Maintainability  | Low    | Low    | Medium   | Resolved — `PaymentIntegrityCode` and `CatalogError.code` are typed string-literal unions, not ad hoc strings                                                    |
+| Lack of circuit breaker for external APIs | `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`    | Resilience       | High   | Medium | High     | Resolved — `src/lib/circuit-breaker.ts` wraps all outbound calls in both clients                                                                                 |
+| Static `/health` endpoint                 | `src/index.ts`                                      | Operational      | Low    | Low    | Medium   | Resolved — `/health?deep=1` pings D1 and KV, returns 503 on failure                                                                                              |
 
 ---
 
 ## Smell Inventory
 
-| Smell                                            | Location                                        | Refactoring                                        | Status |
-| ------------------------------------------------ | ----------------------------------------------- | -------------------------------------------------- | ------ |
-| Multi-argument methods (`createCheckoutSession`) | `src/lib/verifone.ts`                           | Introduce Parameter Object                         | Open   |
-| Long sequential route handlers                   | `src/routes/webhook.ts`                         | Extract Method / Guard Clauses                     | Open   |
-| Duplicated S2S checkout verification             | `src/routes/return.ts`, `src/routes/webhook.ts` | Extract Service (`verifyAndProcessPaymentOutcome`) | Open   |
-| Direct raw D1 `batch` construction in handlers   | `src/routes/return.ts`, `webhook.ts`            | Encapsulate in `OrderStateEngine`                  | Open   |
+| Smell                                            | Location                                                      | Refactoring                                        | Status                                                                                                                                                                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multi-argument methods (`createCheckoutSession`) | `src/lib/verifone.ts`                                         | Introduce Parameter Object                         | Resolved — `createCheckout(env, params)` already takes a single options object                                                                                                                                       |
+| Long sequential route handlers                   | `src/routes/webhook.ts`                                       | Extract Method / Guard Clauses                     | Resolved — logic moved to `src/usecases/process-webhook.ts`; route keeps only JWS/body handling                                                                                                                      |
+| Duplicated S2S checkout verification             | `src/routes/return.ts`, `src/routes/webhook.ts`               | Extract Service (`verifyAndProcessPaymentOutcome`) | Resolved — `assertCheckoutIntegrity` in `src/lib/payment-integrity.ts` (equivalent extraction, different name)                                                                                                       |
+| Direct raw D1 `batch` construction in handlers   | `src/routes/return.ts`, `webhook.ts`, `src/cron/reconcile.ts` | Encapsulate in `OrderStateEngine`                  | Resolved — atomic transitions live in `src/lib/db.ts` (`processReturnAtomically`, `processWebhookAtomically`, `settleOrderAtomically`, etc.); no separate class needed since D1 access was already centralized there |
 
 ---
 
@@ -45,3 +45,13 @@
 - **Error Types:** Throw structured domain errors extending `DomainError` with explicit error codes.
 - **State Transitions:** D1 order status updates must specify expected current state in `WHERE` clauses to prevent status regression.
 - **Secrets:** Isolated in Cloudflare Secrets Store. Never logged or committed.
+
+---
+
+## Status as of 2026-07-29
+
+Every item above is closed. The remaining backlog for this project is entirely
+external — see `DEPLOYMENT_GATE.md` for the non-negotiable blockers (real
+Verifone/Landsbankinn credentials, production Cloudflare resources, storefront
+contract migration, vendor-signed sandbox proof). None of it can be closed from
+inside this repository.

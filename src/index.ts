@@ -63,12 +63,38 @@ app.use('/api/orders/*', async (c, next) => {
 });
 
 // ─── Health check ───────────────────────────────────────────────
-app.get('/health', (c) => {
-  return c.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    environment: c.env.ENVIRONMENT ?? 'unknown',
-  });
+app.get('/health', async (c) => {
+  if (c.req.query('deep') !== '1') {
+    return c.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      environment: c.env.ENVIRONMENT ?? 'unknown',
+    });
+  }
+
+  const checks = { d1: 'ok' as 'ok' | 'error', kv: 'ok' as 'ok' | 'error' };
+
+  try {
+    await c.env.DB.prepare('SELECT 1').first();
+  } catch {
+    checks.d1 = 'error';
+  }
+
+  try {
+    await c.env.CACHE.get('__health_check__');
+  } catch {
+    checks.kv = 'error';
+  }
+
+  const healthy = checks.d1 === 'ok' && checks.kv === 'ok';
+  return c.json(
+    {
+      status: healthy ? 'healthy' : 'unhealthy',
+      checks,
+      timestamp: new Date().toISOString(),
+    },
+    healthy ? 200 : 503,
+  );
 });
 
 // ─── API routes ──────────────────────────────────────────────────

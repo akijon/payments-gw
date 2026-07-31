@@ -203,6 +203,46 @@ describe('POST /api/checkout', () => {
     expect(count?.count).toBe(1);
   });
 
+  it('replays a completed checkout even if the catalog changed since the original attempt', async () => {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO products (id, name, unit_price, currency, active)
+       VALUES ('CATALOG-DRIFT-TEST', 'Catalog drift test product', 5000, 'ISK', 1)`,
+    ).run();
+
+    const idempotencyKey = 'checkout-catalog-drift-0001';
+    const body = JSON.stringify({ items: [{ product_id: 'CATALOG-DRIFT-TEST', quantity: 1 }] });
+
+    const first = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { order_id: string; amount: number };
+    expect(firstBody.amount).toBe(5000);
+
+    // Simulate the product being renamed, repriced, and deactivated after the
+    // original checkout succeeded — none of this should affect the replay.
+    await env.DB.prepare(
+      `UPDATE products SET unit_price = 9999, active = 0, name = 'Renamed' WHERE id = 'CATALOG-DRIFT-TEST'`,
+    ).run();
+
+    const retry = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+
+    expect(retry.status).toBe(200);
+    const retryBody = (await retry.json()) as { order_id: string; amount: number; idempotent_replay: boolean };
+    expect(retryBody.idempotent_replay).toBe(true);
+    expect(retryBody.order_id).toBe(firstBody.order_id);
+    expect(retryBody.amount).toBe(5000);
+
+    const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first<{ count: number }>();
+    expect(count?.count).toBe(1);
+  });
+
   it('rejects reuse of an idempotency key for a different cart', async () => {
     const idempotencyKey = 'checkout-conflict-00001';
     const send = (quantity: number) =>

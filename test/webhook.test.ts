@@ -316,6 +316,65 @@ describe('POST /api/webhooks/verifone', () => {
     expect(processed).toBeNull();
   });
 
+  it('processes an identical webhook delivered concurrently on two parallel connections exactly once', async () => {
+    // Characterizes the race where Verifone (or a retry proxy) delivers the same
+    // event on two simultaneous connections: the pre-check (isWebhookProcessed) is
+    // not atomic with the write, so both requests can pass it before either has
+    // written processed_webhooks. The INSERT OR IGNORE inside processWebhookAtomically
+    // is the actual concurrency guard — exactly one request must apply the
+    // transition and log an event; the other must observe 'duplicate'.
+    const checkoutId = 'chk-wh-concurrent';
+    const orderId = await seedOrder(checkoutId);
+    const payload = webhookPayload(
+      'Checkout - Transaction succeeded',
+      checkoutId,
+      'txn-concurrent-1',
+      'evt-concurrent-1',
+    );
+
+    const [respA, respB] = await Promise.all([
+      SELF.fetch('https://test.example.com/api/webhooks/verifone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-vfi-jws': 'valid.jws.sig' },
+        body: payload,
+      }),
+      SELF.fetch('https://test.example.com/api/webhooks/verifone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-vfi-jws': 'valid.jws.sig' },
+        body: payload,
+      }),
+    ]);
+
+    expect(respA.status).toBe(200);
+    expect(respB.status).toBe(200);
+    const [dataA, dataB] = [(await respA.json()) as { status: string }, (await respB.json()) as { status: string }];
+    const statuses = [dataA.status, dataB.status].sort();
+    // Exactly one side applies the transition; the other observes it as already done,
+    // whichever of the two race outcomes ('duplicate' from the atomic insert, or
+    // 'already_processed' from the earlier pre-check) it lands on.
+    expect(statuses[0]).toMatch(/^(already_processed|duplicate)$/);
+    expect(statuses[1]).toBe('processed');
+
+    const order = await env.DB.prepare('SELECT status FROM orders WHERE id = ?').bind(orderId).first<{
+      status: string;
+    }>();
+    expect(order?.status).toBe('paid');
+
+    const processedCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM processed_webhooks WHERE verifone_event_id = ?',
+    )
+      .bind('evt-concurrent-1')
+      .first<{ count: number }>();
+    expect(processedCount?.count).toBe(1);
+
+    const eventCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM payment_events WHERE order_id = ? AND event_type = 'Checkout - Transaction succeeded'",
+    )
+      .bind(orderId)
+      .first<{ count: number }>();
+    expect(eventCount?.count).toBe(1);
+  });
+
   it('rejects paid webhook when S2S amount does not match order', async () => {
     const checkoutId = 'chk-wh-amt';
     await seedOrder(checkoutId, 18000);

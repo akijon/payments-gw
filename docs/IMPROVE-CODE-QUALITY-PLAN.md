@@ -5,24 +5,24 @@
 - **Date Started:** 2026-07-28
 - **Project:** `irja-payments-gw` (Cloudflare Worker + Hono + D1 + KV)
 - **Primary Domain:** E-commerce payments gateway (Verifone HPP acquirer integration & Landsbankinn daily settlement reconciliation).
-- **Current Status:** Local release checks pass (`npm test`, `typecheck`, `lint` green with 90 tests across 16 files). Production deployment blocked by 10 external environment & key configuration items (`DEPLOYMENT_GATE.md`).
+- **Current Status:** Local release checks pass (`npm test`, `typecheck`, `lint` green with 109 tests across 19 files). Production deployment blocked by 10 external environment & key configuration items (`DEPLOYMENT_GATE.md`) — nothing internal remains.
 - **Primary Risks:** Financial loss, state desynchronization between storefront and gateway, unhandled third-party API failures/timeouts, concurrent return/webhook race conditions.
 
 ---
 
 ## Phase Status
 
-| Phase                              | Skill                        | Status      | Artifact                                       | Target Scope                                                                                                 |
-| ---------------------------------- | ---------------------------- | ----------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| 1 — Build the safety net           | `working-with-legacy-code`   | in-progress | `docs/TESTING.md` + `docs/TECH-DEBT.md` (GATE) | Map test coverage, formalize safety net map, record edge gaps in `verifone.ts` & `reconcile.ts`.             |
-| 2 — Make the code readable         | `clean-code`                 | pending     | `docs/TECH-DEBT.md`                            | Standardize error contexts, eliminate magic error string constants, decompose large route handlers.          |
-| 3 — Apply named refactorings       | `refactoring-patterns`       | pending     | `docs/TECH-DEBT.md`                            | Extract shared `verifyAndProcessCheckoutOutcome()` helper, parameterize client configs.                      |
-| 4 — Reduce complexity              | `software-design-philosophy` | pending     | `docs/TECH-DEBT.md`                            | Encapsulate D1 order state transitions into a deep `OrderStateEngine` module.                                |
-| 5 — Draw the architecture boundary | `clean-architecture`         | pending     | `docs/ARCHITECTURE.md`                         | Extract Hono/Worker-free Use Cases (`CreateCheckout`, `ProcessWebhook`, `ReconcileSettlement`).              |
-| 6 — Lock in the habits             | `pragmatic-programmer`       | pending     | `docs/TECH-DEBT.md`                            | Centralize Hono global error handlers, eliminate duplicate validation knowledge.                             |
-| 7 — Make it survive production     | `release-it`                 | pending     | `docs/RELIABILITY.md`                          | Circuit breaker for Verifone/Landsbankinn, exponential backoff with jitter, deep `/health` endpoint.         |
-| 8 — Size for real load             | `system-design`              | pending     | `docs/ARCHITECTURE.md` + `docs/RELIABILITY.md` | KV cache TTL tuning for JWKS/OAuth, D1 index verification on `orders(transaction_id)`.                       |
-| 9 — Get the data layer right       | `ddia-systems`               | pending     | `docs/ARCHITECTURE.md`                         | Verify D1 transaction batch isolation against concurrent `/api/return` & `/api/webhooks/verifone` execution. |
+| Phase                              | Skill                        | Status                                  | Artifact                                       | Target Scope                                                                                                                                                                                        |
+| ---------------------------------- | ---------------------------- | --------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 — Build the safety net           | `working-with-legacy-code`   | done                                    | `docs/TESTING.md` + `docs/TECH-DEBT.md` (GATE) | Safety net map complete; characterization tests added for `verifone.ts` token refresh, `webhook.ts` concurrent delivery, `reconcile.ts`'s no-pagination assumption.                                 |
+| 2 — Make the code readable         | `clean-code`                 | done                                    | `docs/TECH-DEBT.md`                            | Error codes are typed string-literal unions (`CatalogError.code`, `PaymentIntegrityCode`); route handlers decomposed via the Phase 5 use-case layer.                                                |
+| 3 — Apply named refactorings       | `refactoring-patterns`       | done                                    | `docs/TECH-DEBT.md`                            | Shared verification already existed as `assertCheckoutIntegrity` (`src/lib/payment-integrity.ts`); `createCheckout` already took a parameter object.                                                |
+| 4 — Reduce complexity              | `software-design-philosophy` | done                                    | `docs/TECH-DEBT.md`                            | D1 order state transitions already centralized in `src/lib/db.ts`; `reconcile.ts`'s remaining raw SQL moved there too (`settleOrderAtomically`, etc.). No separate `OrderStateEngine` class needed. |
+| 5 — Draw the architecture boundary | `clean-architecture`         | done                                    | `docs/ARCHITECTURE.md`                         | Extracted `src/usecases/create-checkout.ts`, `process-return.ts`, `process-webhook.ts`. Routes are thin HTTP adapters. `reconcile.ts` already had no framework dependency.                          |
+| 6 — Lock in the habits             | `pragmatic-programmer`       | done                                    | `docs/TECH-DEBT.md`                            | Global Hono error handler already existed (`src/index.ts` `app.onError`); validation logic lives once each in `src/lib/catalog.ts` / `src/lib/payment-integrity.ts`.                                |
+| 7 — Make it survive production     | `release-it`                 | done                                    | `docs/RELIABILITY.md`                          | `src/lib/circuit-breaker.ts` wraps Verifone/Landsbankinn calls (in-memory, per-isolate, best-effort). Deep `/health?deep=1` pings D1 + KV.                                                          |
+| 8 — Size for real load             | `system-design`              | deferred: needs production traffic data | `docs/ARCHITECTURE.md` + `docs/RELIABILITY.md` | KV cache TTL tuning and rate-limit thresholds should be set from observed traffic (`docs/edge-security.md`), not guessed — external/operational, not code.                                          |
+| 9 — Get the data layer right       | `ddia-systems`               | done                                    | `docs/ARCHITECTURE.md`                         | D1 batch atomicity already covered by existing tests; extended with a true concurrent-delivery test in `test/webhook.test.ts`.                                                                      |
 
 _Statuses: pending · in-progress · awaiting-evidence · done · deferred: <reason> · skipped: <reason>_
 
@@ -107,19 +107,26 @@ _Statuses: pending · in-progress · awaiting-evidence · done · deferred: <rea
 
 ## Key Decisions
 
-| Date       | Phase   | Decision                                                 | Rationale                                                                                                  |
-| ---------- | ------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 2026-07-28 | Phase 1 | Safety net built on Vitest Workers pool                  | Provides Miniflare D1/KV in-memory isolation per test without requiring live remote Cloudflare resources.  |
-| 2026-07-28 | Phase 4 | Encapsulate D1 batch transitions into `OrderStateEngine` | Prevents scattered D1 raw SQL calls and guarantees consistent `payment_events` audit logging.              |
-| 2026-07-28 | Phase 5 | Extract framework-free Use Cases                         | Isolates payment state rules from Hono `c` context and Cloudflare Worker `env` bindings for clean testing. |
+| Date       | Phase   | Decision                                                               | Rationale                                                                                                                                                       |
+| ---------- | ------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-28 | Phase 1 | Safety net built on Vitest Workers pool                                | Provides Miniflare D1/KV in-memory isolation per test without requiring live remote Cloudflare resources.                                                       |
+| 2026-07-28 | Phase 4 | Encapsulate D1 batch transitions into `OrderStateEngine`               | Prevents scattered D1 raw SQL calls and guarantees consistent `payment_events` audit logging.                                                                   |
+| 2026-07-28 | Phase 5 | Extract framework-free Use Cases                                       | Isolates payment state rules from Hono `c` context and Cloudflare Worker `env` bindings for clean testing.                                                      |
+| 2026-07-29 | Phase 7 | Circuit breaker stays in-memory/per-isolate, no KV-backed shared state | A distributed breaker adds a KV round-trip to every call for marginal benefit at this traffic scale; documented as best-effort in `src/lib/circuit-breaker.ts`. |
+| 2026-07-29 | Phase 5 | No ports/DI layer (`PaymentGatewayPort`, `OrderRepositoryPort`)        | Would fight the established `vi.mock()` + `SELF.fetch()` test convention (`AGENTS.md`) for no material benefit; use cases take `env: Env` directly instead.     |
 
 ---
 
 ## Next Actions
 
 - [x] Create `docs/IMPROVE-CODE-QUALITY-PLAN.md` tracker
-- [ ] Implement Phase 1 artifacts (`docs/TESTING.md`, `docs/TECH-DEBT.md`)
-- [ ] Execute Phase 2 clean code refactoring (error types, string constants)
-- [ ] Execute Phase 3 refactoring (`verifyAndProcessPaymentOutcome`)
-- [ ] Execute Phase 4 deep module extraction (`OrderStateEngine`)
-- [ ] Execute Phase 5 clean architecture boundary extraction
+- [x] Implement Phase 1 artifacts (`docs/TESTING.md`, `docs/TECH-DEBT.md`)
+- [x] Execute Phase 2 clean code refactoring (error types were already typed unions)
+- [x] Execute Phase 3 refactoring (shared verification already existed as `assertCheckoutIntegrity`)
+- [x] Execute Phase 4 deep module extraction (already centralized in `src/lib/db.ts`, extended to `reconcile.ts`)
+- [x] Execute Phase 5 clean architecture boundary extraction (`src/usecases/*`)
+- [x] Execute Phase 7 resilience (circuit breaker, deep health check)
+- [x] Execute Phase 9 characterization tests (concurrent webhook delivery)
+- [ ] Phase 8 (cache TTL / rate-limit tuning) — deferred until real production traffic data exists; not actionable from inside this repo
+
+All internally-actionable phases are closed. Remaining work is external — see `DEPLOYMENT_GATE.md`.
