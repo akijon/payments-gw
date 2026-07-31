@@ -4,6 +4,7 @@
 
 import type { Env } from '../types/env';
 import type { LandsbankinnSettlement, LandsbankinnTransaction } from '../types/api';
+import { withCircuitBreaker } from './circuit-breaker';
 
 const TOKEN_KEY = 'landsbankinn_oauth_token';
 const TOKEN_BUFFER_MS = 30_000;
@@ -19,7 +20,9 @@ function apiUrl(base: string, path: string): URL {
 }
 
 async function fetchJson(url: URL, init: RequestInit, operation: string): Promise<unknown> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const response = await withCircuitBreaker('landsbankinn', () =>
+    fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }),
+  );
   if (!response.ok) throw new Error(`${operation} failed (${response.status})`);
 
   const declaredLength = Number(response.headers.get('Content-Length'));

@@ -171,10 +171,13 @@ CREATE INDEX IF NOT EXISTS idx_reconciliation_exceptions_unresolved
 ON reconciliation_exceptions(resolved_at, created_at);
 `;
 
+<<<<<<< HEAD
 const MIGRATION_0007 = `
 CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
 `;
 
+=======
+>>>>>>> origin/main
 function splitSql(sql: string): string[] {
   return sql
     .split(';')
@@ -191,7 +194,10 @@ beforeAll(async () => {
     { name: '0004_checkout_idempotency.sql', queries: splitSql(MIGRATION_0004) },
     { name: '0005_order_invariants.sql', queries: MIGRATION_0005_QUERIES },
     { name: '0006_reconciliation_runs.sql', queries: splitSql(MIGRATION_0006) },
+<<<<<<< HEAD
     { name: '0007_order_number_index.sql', queries: splitSql(MIGRATION_0007) },
+=======
+>>>>>>> origin/main
   ];
   await applyD1Migrations(env.DB, migrations);
 });

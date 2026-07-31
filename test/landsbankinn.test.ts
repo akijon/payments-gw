@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../src/types/env';
 import { getLandsbankinnToken, getSettlementTransactions, getSettlements } from '../src/lib/landsbankinn';
+import { __resetForTests } from '../src/lib/circuit-breaker';
 
 function testEnv(): Env {
   const values = new Map<string, string>();
@@ -21,6 +22,10 @@ function testEnv(): Env {
     LANDSBANKINN_SCOPE: 'acquiring',
   } as Env;
 }
+
+beforeEach(() => {
+  __resetForTests();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -93,5 +98,19 @@ describe('Landsbankinn API client', () => {
 
     await expect(getSettlementTransactions(env, 'settlement/../1')).resolves.toEqual([]);
     expect(String(fetchMock.mock.calls[1][0])).toContain('Settlements/settlement%2F..%2F1/Transactions');
+  });
+
+  it('opens the circuit breaker after repeated failures and short-circuits further calls', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+    vi.stubGlobal('fetch', fetchMock);
+    const env = testEnv();
+
+    for (let i = 0; i < 5; i++) {
+      await expect(getLandsbankinnToken(env)).rejects.toThrow();
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
+    await expect(getLandsbankinnToken(env)).rejects.toThrow('Circuit breaker open');
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });

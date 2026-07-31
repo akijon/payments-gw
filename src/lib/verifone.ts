@@ -4,6 +4,7 @@
 
 import type { Env } from '../types/env';
 import type { VerifoneCheckoutResponse, VerifoneCheckoutDetail } from '../types/api';
+import { withCircuitBreaker } from './circuit-breaker';
 
 // ─── OAuth2 token management ─────────────────────────────────────
 
@@ -28,17 +29,19 @@ export async function getVerifoneToken(env: Env): Promise<string> {
   }
 
   // 2. Request new token via client credentials grant
-  const resp = await fetch(env.VERIFONE_OAUTH_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: env.VERIFONE_CLIENT_ID,
-      client_secret: env.VERIFONE_CLIENT_SECRET,
-      scope: env.VERIFONE_SCOPE,
+  const resp = await withCircuitBreaker('verifone', () =>
+    fetch(env.VERIFONE_OAUTH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: env.VERIFONE_CLIENT_ID,
+        client_secret: env.VERIFONE_CLIENT_SECRET,
+        scope: env.VERIFONE_SCOPE,
+      }),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     }),
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  });
+  );
 
   if (!resp.ok) {
     throw upstreamError('Verifone OAuth2', resp);
@@ -103,16 +106,18 @@ export async function createCheckout(
     },
   };
 
-  const resp = await fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Accept: '*/*',
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  });
+  const resp = await withCircuitBreaker('verifone', () =>
+    fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: '*/*',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }),
+  );
 
   if (!resp.ok) {
     throw upstreamError('Verifone createCheckout', resp);
@@ -145,14 +150,16 @@ export async function getCheckout(env: Env, checkoutId: string): Promise<Verifon
   }
   const token = await getVerifoneToken(env);
 
-  const resp = await fetch(`${env.VERIFONE_API_BASE}/v2/checkout/${encodeURIComponent(checkoutId)}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: '*/*',
-    },
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  });
+  const resp = await withCircuitBreaker('verifone', () =>
+    fetch(`${env.VERIFONE_API_BASE}/v2/checkout/${encodeURIComponent(checkoutId)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: '*/*',
+      },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }),
+  );
 
   if (!resp.ok) {
     throw upstreamError('Verifone getCheckout', resp);

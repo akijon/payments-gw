@@ -9,20 +9,22 @@
 
 import type { Env } from '../types/env';
 import { getSettlements, getSettlementTransactions } from '../lib/landsbankinn';
-import { generateUUID } from '../lib/db';
+import {
+  completeReconciliationRun,
+  failReconciliationRun,
+  generateUUID,
+  getLastCompletedReconciliationDateTo,
+  getOrderByOrderNumber,
+  recordReconciliationException,
+  recordSettlementBatch,
+  settleOrderAtomically,
+  startReconciliationRun,
+} from '../lib/db';
 import type { LandsbankinnSettlement, LandsbankinnTransaction } from '../types/api';
 
 export interface ReconciliationDependencies {
   getSettlements: (dateFrom: string, dateTo: string) => Promise<LandsbankinnSettlement[]>;
   getSettlementTransactions: (settlementId: string) => Promise<LandsbankinnTransaction[]>;
-}
-
-interface ReconciliationOrder {
-  id: string;
-  status: string;
-  amount: number;
-  currency: string;
-  verifone_transaction_id: string | null;
 }
 
 const APPROVED_TRANSACTION_STATUSES = new Set(['SETTLED']);
@@ -57,49 +59,15 @@ function settlementAuditPayload(settlementId: string, transaction: LandsbankinnT
 }
 
 async function reconciliationWindow(db: D1Database, now: Date): Promise<{ dateFrom: string; dateTo: string }> {
-  const previous = await db
-    .prepare(
-      `SELECT date_to FROM reconciliation_runs
-       WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 1`,
-    )
-    .first<{ date_to: string }>();
+  const previousDateTo = await getLastCompletedReconciliationDateTo(db);
   const fallbackStart = now.getTime() - RECONCILIATION_WINDOW_DAYS * DAY_MS;
-  const previousTime = previous ? Date.parse(`${previous.date_to}T00:00:00Z`) : Number.NaN;
+  const previousTime = previousDateTo ? Date.parse(`${previousDateTo}T00:00:00Z`) : Number.NaN;
   const startTime = Number.isFinite(previousTime) ? previousTime - DAY_MS : fallbackStart;
   const endTime = Math.min(now.getTime(), startTime + RECONCILIATION_WINDOW_DAYS * DAY_MS);
   return {
     dateFrom: new Date(startTime).toISOString().slice(0, 10),
     dateTo: new Date(endTime).toISOString().slice(0, 10),
   };
-}
-
-async function recordException(
-  db: D1Database,
-  input: {
-    runId: string;
-    settlementId: string;
-    transactionId: string;
-    orderId?: string;
-    reason: string;
-    details: Record<string, unknown>;
-  },
-): Promise<void> {
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO reconciliation_exceptions
-       (id, run_id, settlement_id, transaction_id, order_id, reason, details_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      generateUUID(),
-      input.runId,
-      input.settlementId,
-      input.transactionId,
-      input.orderId ?? null,
-      input.reason,
-      JSON.stringify(input.details),
-    )
-    .run();
 }
 
 /**
@@ -114,12 +82,7 @@ export async function reconcile(
   const { dateFrom, dateTo } = await reconciliationWindow(env.DB, now);
   const runId = generateUUID();
 
-  await env.DB.prepare(
-    `INSERT INTO reconciliation_runs (id, started_at, date_from, date_to, status)
-       VALUES (?, ?, ?, ?, 'running')`,
-  )
-    .bind(runId, now.toISOString(), dateFrom, dateTo)
-    .run();
+  await startReconciliationRun(env.DB, { id: runId, startedAt: now.toISOString(), dateFrom, dateTo });
   console.log(
     JSON.stringify({ message: 'Reconciliation started', run_id: runId, date_from: dateFrom, date_to: dateTo }),
   );
@@ -131,32 +94,12 @@ export async function reconcile(
 
     for (const settlement of settlements) {
       const transactions = await dependencies.getSettlementTransactions(settlement.id);
-
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO settlements (
-          id, settlement_date, total_amount, currency, transaction_count, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-        .bind(
-          settlement.id,
-          settlement.settlementDate,
-          settlement.totalAmount,
-          settlement.currency,
-          settlement.transactionCount,
-          JSON.stringify({
-            id: settlement.id,
-            settlementDate: settlement.settlementDate,
-            totalAmount: settlement.totalAmount,
-            currency: settlement.currency,
-            transactionCount: settlement.transactionCount,
-          }),
-        )
-        .run();
+      await recordSettlementBatch(env.DB, settlement);
 
       for (const transaction of transactions) {
         if (!transaction.merchantReference || !isSettledSale(transaction)) {
           totalUnmatched++;
-          await recordException(env.DB, {
+          await recordReconciliationException(env.DB, {
             runId,
             settlementId: settlement.id,
             transactionId: transaction.id,
@@ -176,16 +119,11 @@ export async function reconcile(
           continue;
         }
 
-        const order = await env.DB.prepare(
-          `SELECT id, status, amount, currency, verifone_transaction_id
-           FROM orders WHERE order_number = ?`,
-        )
-          .bind(transaction.merchantReference)
-          .first<ReconciliationOrder>();
+        const order = await getOrderByOrderNumber(env.DB, transaction.merchantReference);
 
         if (!order) {
           totalUnmatched++;
-          await recordException(env.DB, {
+          await recordReconciliationException(env.DB, {
             runId,
             settlementId: settlement.id,
             transactionId: transaction.id,
@@ -206,7 +144,7 @@ export async function reconcile(
           order.currency !== transaction.currency
         ) {
           totalUnmatched++;
-          await recordException(env.DB, {
+          await recordReconciliationException(env.DB, {
             runId,
             settlementId: settlement.id,
             transactionId: transaction.id,
@@ -236,28 +174,20 @@ export async function reconcile(
 
         // Conditional transition prevents duplicate/concurrent callbacks from
         // settling an order or writing an audit record twice.
-        const results = await env.DB.batch([
-          env.DB.prepare(
-            `UPDATE orders
-             SET status = 'settled', landsbankinn_settlement_id = ?,
-                 settled_at = ?, updated_at = datetime('now')
-             WHERE id = ? AND status = 'paid' AND amount = ? AND currency = ?
-               AND verifone_transaction_id IS NOT NULL`,
-          ).bind(settlement.id, now.toISOString(), order.id, transaction.amount, transaction.currency),
-          env.DB.prepare(
-            `INSERT INTO payment_events (
-              id, order_id, event_type, source, raw_payload, verified
-            )
-             SELECT ?, ?, 'settlement_matched', 'landsbankinn_api', ?, 1
-             WHERE changes() = 1`,
-          ).bind(generateUUID(), order.id, settlementAuditPayload(settlement.id, transaction)),
-        ]);
+        const settled = await settleOrderAtomically(env.DB, {
+          orderId: order.id,
+          settlementId: settlement.id,
+          settledAt: now.toISOString(),
+          transactionAmount: transaction.amount,
+          transactionCurrency: transaction.currency,
+          auditPayload: settlementAuditPayload(settlement.id, transaction),
+        });
 
-        if (results[0].meta.changes === 1) {
+        if (settled) {
           totalMatched++;
         } else {
           totalUnmatched++;
-          await recordException(env.DB, {
+          await recordReconciliationException(env.DB, {
             runId,
             settlementId: settlement.id,
             transactionId: transaction.id,
@@ -284,27 +214,20 @@ export async function reconcile(
       transactionsUnmatched: totalUnmatched,
     };
 
-    await env.DB.prepare(
-      `UPDATE reconciliation_runs
-         SET status = 'completed', completed_at = ?, settlements_processed = ?,
-             transactions_matched = ?, transactions_unmatched = ?
-         WHERE id = ? AND status = 'running'`,
-    )
-      .bind(completedAt, settlements.length, totalMatched, totalUnmatched, runId)
-      .run();
+    await completeReconciliationRun(env.DB, {
+      runId,
+      completedAt,
+      settlementsProcessed: settlements.length,
+      transactionsMatched: totalMatched,
+      transactionsUnmatched: totalUnmatched,
+    });
     await env.CACHE.put('last_reconciliation', JSON.stringify(summary), {
       expirationTtl: 7 * 86400,
     });
     console.log(JSON.stringify({ message: 'Reconciliation completed', ...summary }));
   } catch (err) {
     const errorName = err instanceof Error ? err.name : 'unknown';
-    await env.DB.prepare(
-      `UPDATE reconciliation_runs
-         SET status = 'failed', completed_at = ?, error_name = ?
-         WHERE id = ? AND status = 'running'`,
-    )
-      .bind(new Date().toISOString(), errorName, runId)
-      .run();
+    await failReconciliationRun(env.DB, { runId, completedAt: new Date().toISOString(), errorName });
     console.error(JSON.stringify({ message: 'Reconciliation failed', run_id: runId, error: errorName }));
     throw err;
   }
