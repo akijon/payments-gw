@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk proxy *)",
+      "Bash(gh pr *)",
+      "Bash(gh run *)",
+      "Bash(git fetch *)",
+      "Bash(git ls-tree *)",
+      "Bash(rm -rf /tmp/claude-1000/-home-akij-workspace-payments-gw/3ea7fd19-5fd3-416d-a16f-98d26be385e7/scratchpad/pr4-check)",
+      "Bash(git worktree *)",
+      "Bash(npm ci *)"
+    ]
+  }
+}
