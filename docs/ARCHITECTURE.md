@@ -41,10 +41,10 @@ Cron (06:00 UTC) → Worker /scheduled → Landsbankinn Acquiring API → D1 (se
 
 ### Violations Addressed
 
-| Violation                                              | Location                                            | Fix                                                        | Status  |
-| ------------------------------------------------------ | --------------------------------------------------- | ---------------------------------------------------------- | ------- |
+| Violation                                              | Location                                            | Fix                                                                                                     | Status   |
+| ------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------- |
 | Direct D1 raw SQL execution in route handlers          | `src/routes/checkout.ts`, `return.ts`, `webhook.ts` | Extracted to framework-free use cases in `src/usecases/*`; all D1 access centralized in `src/lib/db.ts` | Resolved |
-| Verifone HTTP API calls directly inside route handlers | `src/routes/return.ts`, `webhook.ts`                | Moved into `src/usecases/process-return.ts` / `process-webhook.ts` | Resolved |
+| Verifone HTTP API calls directly inside route handlers | `src/routes/return.ts`, `webhook.ts`                | Moved into `src/usecases/process-return.ts` / `process-webhook.ts`                                      | Resolved |
 
 Full ports/DI (`PaymentGatewayPort`, `OrderRepositoryPort`) was considered and deliberately
 not used: it would fight the established test convention (`vi.mock()` module mocking +
@@ -71,9 +71,9 @@ after. Moving it would have been a pure file rename with no substantive change.
 
 ## Decision Log
 
-| Date       | Decision                    | Rationale                                                                                                                                           |
-| ---------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-07-28 | Server-side pricing catalog | Storefront cannot supply price or amount; prices resolved authoritatively from D1 `products` table to eliminate price manipulation vulnerabilities. |
-| 2026-07-28 | JWS Webhook Verification    | Verifone webhooks verified using RFC 7797 detached JWS signatures with JWKS key caching in KV.                                                      |
-| 2026-07-28 | Webhook Idempotency         | Deduplication via `processed_webhooks` table using `verifone_event_id` primary key.                                                                 |
+| Date       | Decision                         | Rationale                                                                                                                                                                                                                                    |
+| ---------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-28 | Server-side pricing catalog      | Storefront cannot supply price or amount; prices resolved authoritatively from D1 `products` table to eliminate price manipulation vulnerabilities.                                                                                          |
+| 2026-07-28 | JWS Webhook Verification         | Verifone webhooks verified using RFC 7797 detached JWS signatures with JWKS key caching in KV.                                                                                                                                               |
+| 2026-07-28 | Webhook Idempotency              | Deduplication via `processed_webhooks` table using `verifone_event_id` primary key.                                                                                                                                                          |
 | 2026-07-29 | Thin use-case layer, no ports/DI | Closed the remaining internal engineering backlog (circuit breaker, deep health check, use-case extraction, reconciliation DB encapsulation) with dummy/local material only; every remaining blocker is external — see `DEPLOYMENT_GATE.md`. |

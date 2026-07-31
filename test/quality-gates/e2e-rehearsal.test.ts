@@ -221,7 +221,13 @@ describe('Sandbox rehearsal (mocked) — SANDBOX_E2E_GATE.md checklist', () => {
     const { reconcile } = await import('../../src/cron/reconcile');
     await reconcile(env, {
       getSettlements: async () => [
-        { id: 'settlement-rehearsal-1', settlementDate: '2026-07-28', totalAmount: 36000, currency: 'ISK', transactionCount: 2 },
+        {
+          id: 'settlement-rehearsal-1',
+          settlementDate: '2026-07-28',
+          totalAmount: 36000,
+          currency: 'ISK',
+          transactionCount: 2,
+        },
       ],
       getSettlementTransactions: async () => [
         {
@@ -255,9 +261,7 @@ describe('Sandbox rehearsal (mocked) — SANDBOX_E2E_GATE.md checklist', () => {
       .first<{ status: string }>();
     expect(rejectedOrder?.status).toBe('paid'); // unchanged — wrong amount rejected
 
-    const mismatchException = await env.DB.prepare(
-      `SELECT reason FROM reconciliation_exceptions WHERE order_id = ?`,
-    )
+    const mismatchException = await env.DB.prepare(`SELECT reason FROM reconciliation_exceptions WHERE order_id = ?`)
       .bind(rejectOrderId)
       .first<{ reason: string }>();
     expect(mismatchException?.reason).toBe('payment_integrity_mismatch');
