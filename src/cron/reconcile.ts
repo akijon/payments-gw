@@ -137,6 +137,26 @@ export async function reconcile(
           continue;
         }
 
+        // The reconciliation window deliberately overlaps the prior run, so the same
+        // settled transaction can legitimately arrive again. Recognize it as an
+        // idempotent replay instead of a payment_integrity_mismatch, which would
+        // otherwise corrupt the matched/unmatched counters and page on-call for
+        // nothing every single day.
+        if (
+          order.status === 'settled' &&
+          order.landsbankinn_settlement_id === settlement.id &&
+          order.amount === transaction.amount &&
+          order.currency === transaction.currency
+        ) {
+          totalMatched++;
+          console.log('Skipping already-settled order from an overlapping reconciliation window', {
+            orderId: order.id,
+            settlementId: settlement.id,
+            acquirerTransactionId: transaction.id,
+          });
+          continue;
+        }
+
         if (
           order.status !== 'paid' ||
           !order.verifone_transaction_id ||

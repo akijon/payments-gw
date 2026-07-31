@@ -145,6 +145,49 @@ describe('reconcile', () => {
     expect(exception?.reason).toBe('payment_integrity_mismatch');
   });
 
+  it('treats a re-delivered settled transaction from an overlapping window as a matched replay', async () => {
+    const { reconcile } = await import('../src/cron/reconcile');
+    const order = await seedOrder('paid');
+    const dependencies = reconciliationDependencies([
+      {
+        id: 'acquirer-txn-replay',
+        merchantReference: order.orderNumber,
+        amount: 18000,
+        currency: 'ISK',
+        transactionType: 'SALE',
+        transactionStatus: 'SETTLED',
+      },
+    ]);
+
+    // First run settles the order under settlement-1 (see reconciliationDependencies).
+    await (reconcile as unknown as ReconcileWithDependencies)(env, dependencies);
+    const afterFirstRun = await env.DB.prepare('SELECT status FROM orders WHERE id = ?')
+      .bind(order.id)
+      .first<{ status: string }>();
+    expect(afterFirstRun?.status).toBe('settled');
+
+    // Second run's window overlaps the first and re-delivers the same settlement
+    // transaction for the now-settled order.
+    await (reconcile as unknown as ReconcileWithDependencies)(env, dependencies);
+
+    const stored = await env.DB.prepare('SELECT status FROM orders WHERE id = ?')
+      .bind(order.id)
+      .first<{ status: string }>();
+    expect(stored?.status).toBe('settled');
+
+    const exceptionCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM reconciliation_exceptions WHERE order_id = ? AND reason = 'payment_integrity_mismatch'",
+    )
+      .bind(order.id)
+      .first<{ count: number }>();
+    expect(exceptionCount?.count).toBe(0);
+
+    const secondRun = await env.DB.prepare(
+      'SELECT transactions_matched, transactions_unmatched FROM reconciliation_runs ORDER BY started_at DESC LIMIT 1',
+    ).first<{ transactions_matched: number; transactions_unmatched: number }>();
+    expect(secondRun).toEqual({ transactions_matched: 1, transactions_unmatched: 0 });
+  });
+
   it('processes a large settlement transaction batch in one pass (pins current no-pagination assumption)', async () => {
     // landsbankinn.ts has no pagination handling today, and this reconciliation loop
     // assumes getSettlementTransactions already returned the complete result set for

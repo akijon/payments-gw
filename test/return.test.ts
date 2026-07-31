@@ -196,6 +196,39 @@ describe('GET /api/return', () => {
     expect(order!.status).toBe('failed');
   });
 
+  it('recovers an order from failed to paid on a verified late-arriving success', async () => {
+    const orderId = await seedOrder();
+    await env.DB.prepare(
+      `UPDATE orders SET status = 'failed', verifone_transaction_id = 'txn-earlier-fail' WHERE id = ?`,
+    )
+      .bind(orderId)
+      .run();
+
+    const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: 'chk-return-1',
+      status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-TEST',
+      transaction_id: 'txn-recovered',
+      events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-recovered', timestamp: '2026-07-31T10:00:00Z' }],
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({ status: 'success', transactionId: 'txn-recovered' });
+
+    const resp = await SELF.fetch(
+      `https://test.example.com/api/return?order_id=${orderId}&transaction_id=txn-recovered&checkout_id=chk-return-1`,
+      { redirect: 'manual' },
+    );
+
+    expect(resp.status).toBe(303);
+    expect(resp.headers.get('location')).toContain('status=paid');
+    const order = await env.DB.prepare('SELECT status, verifone_transaction_id FROM orders WHERE id = ?')
+      .bind(orderId)
+      .first<{ status: string; verifone_transaction_id: string }>();
+    expect(order).toEqual({ status: 'paid', verifone_transaction_id: 'txn-recovered' });
+  });
+
   it('does not overwrite or duplicate-audit a concurrent webhook transition', async () => {
     const orderId = await seedOrder();
     const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');

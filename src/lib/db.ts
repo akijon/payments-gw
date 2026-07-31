@@ -420,12 +420,19 @@ export interface AtomicReturnTransition {
 
 /** Apply a verified browser-return transition and its audit event atomically. */
 export async function processReturnAtomically(db: D1Database, input: AtomicReturnTransition): Promise<boolean> {
+  // 'paid' includes 'failed' so a verified success can recover an order that a
+  // prior unverified/incorrect failure transition already marked failed —
+  // mirrors the webhook path in applyWebhookTransition above.
+  const allowedFrom =
+    input.status === 'paid'
+      ? "status IN ('pending', 'checkout_created', 'payment_pending', 'failed')"
+      : "status IN ('pending', 'checkout_created', 'payment_pending')";
   const update = db
     .prepare(
       `UPDATE orders SET status = ?, updated_at = datetime('now'),
        paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE paid_at END,
        verifone_transaction_id = COALESCE(?, verifone_transaction_id)
-     WHERE id = ? AND status IN ('pending', 'checkout_created', 'payment_pending')`,
+     WHERE id = ? AND ${allowedFrom}`,
     )
     .bind(input.status, input.status, input.transactionId ?? null, input.orderId);
   const event = db
@@ -463,6 +470,7 @@ export interface ReconciliationOrder {
   amount: number;
   currency: string;
   verifone_transaction_id: string | null;
+  landsbankinn_settlement_id: string | null;
 }
 
 export async function getLastCompletedReconciliationDateTo(db: D1Database): Promise<string | null> {
@@ -579,7 +587,7 @@ export async function recordReconciliationException(
 export async function getOrderByOrderNumber(db: D1Database, orderNumber: string): Promise<ReconciliationOrder | null> {
   const row = await db
     .prepare(
-      `SELECT id, status, amount, currency, verifone_transaction_id
+      `SELECT id, status, amount, currency, verifone_transaction_id, landsbankinn_settlement_id
        FROM orders WHERE order_number = ?`,
     )
     .bind(orderNumber)

@@ -40,17 +40,6 @@ export type CreateCheckoutOutcome =
   | { status: 502; body: ErrorBody };
 
 export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput): Promise<CreateCheckoutOutcome> {
-  let resolved: Awaited<ReturnType<typeof resolveCheckoutItems>>;
-  try {
-    resolved = await resolveCheckoutItems(env.DB, input.items);
-  } catch (error) {
-    if (error instanceof CatalogError) {
-      return { status: error.status, body: { error: error.message, code: error.code } };
-    }
-    throw error;
-  }
-
-  const { items, totalAmount, currency } = resolved;
   const {
     claimCheckoutAttempt,
     completeCheckoutAttempt,
@@ -70,9 +59,13 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
   const orderId = generateUUID();
   const orderNumber = generateOrderNumber();
   const keyHash = await hashIdempotencyValue(input.idempotencyKey);
+  // Fingerprint the raw client request, not resolved catalog data: a product
+  // rename/reprice/deactivation between the original attempt and a replay must
+  // not turn a legitimate idempotent replay into a false conflict or catalog
+  // error further down.
   const requestHash = await hashIdempotencyValue(
     JSON.stringify({
-      items,
+      items: input.items,
       customer_email: input.customerEmail ?? null,
       customer_name: input.customerName ?? null,
     }),
@@ -118,6 +111,20 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     }
     // Reclaimed: fall through and create a fresh checkout for `orderId`.
   }
+
+  // Only reached for a genuinely new (or reclaimed) attempt — a pure replay hit
+  // above already returned without touching the catalog.
+  let resolved: Awaited<ReturnType<typeof resolveCheckoutItems>>;
+  try {
+    resolved = await resolveCheckoutItems(env.DB, input.items);
+  } catch (error) {
+    await failCheckoutAttempt(env.DB, keyHash);
+    if (error instanceof CatalogError) {
+      return { status: error.status, body: { error: error.message, code: error.code } };
+    }
+    throw error;
+  }
+  const { items, totalAmount, currency } = resolved;
 
   const orderAccessToken = await deriveOrderAccessToken(input.idempotencyKey, orderId);
   try {
