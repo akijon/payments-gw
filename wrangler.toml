@@ -9,6 +9,9 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "sandbox"
 STOREFRONT_URL = "https://irja.khalipa.net"
+# Same-origin public API: storefront proxies /api/* → this Worker via service binding.
+# Verifone return/webhooks must hit this origin, not workers.dev.
+PUBLIC_API_URL = "https://irja.khalipa.net"
 VERIFONE_API_BASE = "https://cst.test-gsc.vfims.com/oidc/checkout-service"
 VERIFONE_OAUTH_URL = "https://cst1.test-vam.vfims.com/oauth2/realms/root/realms/VerifoneServices/access_token"
 LANDSBANKINN_API_BASE = "https://apisandbox.landsbankinn.is/api/Acquiring/Acquiring/v1"
