@@ -19,9 +19,9 @@ This document supersedes readiness claims in older checklist/status documents. A
 - [ ] Create isolated production D1, KV, and Rate Limiting resources and create ignored `wrangler.production.toml` from the example.
 - [ ] Supply a least-privilege Cloudflare API token with Worker deploy, secret-list, D1, KV, and rate-limit permissions for only this account/project.
 - [ ] Configure all required production secrets; do not store their values in Git, logs, or this document.
-- [ ] Apply and verify migrations `0001`–`0006` with `wrangler d1 migrations apply` after a tested backup/rollback plan.
+- [ ] Apply and verify migrations `0001`–`0007` with `wrangler d1 migrations apply` after a tested backup/rollback plan. `0007_order_number_index.sql` backs the reconciliation cron's `order_number` lookup; skipping it degrades reconciliation, it does not fail loudly.
 - [ ] Replace the live storefront's `/api/teya/checkout` contract and Teya branding with the documented Verifone contract; verify product identifiers and prices come from the same canonical catalog.
-- [ ] Configure `PUBLIC_API_URL` and route its `/api/return` path to this Worker; the current `https://irja.khalipa.net/api/return` responds with 404.
+- [ ] Verify the `PUBLIC_API_URL` origin actually reaches this Worker. `PUBLIC_API_URL` is set to the storefront origin (`https://irja.khalipa.net`), so Verifone returns land on the storefront and depend on its `/api/*` service-binding proxy forwarding `/api/return`. This path previously responded `404`; the gate is a non-404 `GET <PUBLIC_API_URL>/api/return` reaching this Worker. Until it is verified, sandbox and production checkouts strand the customer after payment.
 - [ ] Configure and verify Cloudflare dashboard WAF/rate-limit rules from `docs/edge-security.md`.
 - [ ] Replace development catalog fixture data with approved merchant catalog data.
 - [ ] Complete every redacted scenario in `SANDBOX_E2E_GATE.md` using vendor sandbox systems and a vendor-signed webhook.

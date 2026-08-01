@@ -15,3 +15,7 @@ LANDSBANKINN_SCOPE="acquiring"
 # Environment
 ENVIRONMENT="sandbox"
 STOREFRONT_URL="https://irja.khalipa.net"
+# Same-origin public API: the storefront proxies /api/* to this Worker via a
+# service binding, so Verifone must return to that origin, not workers.dev.
+# Unset locally means "use the origin serving the request".
+PUBLIC_API_URL="https://irja.khalipa.net"

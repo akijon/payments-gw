@@ -2,13 +2,14 @@
 
 ## Debt Ledger
 
-| Item                                      | Location                                            | Type             | Risk   | Effort | Priority | Status                                                                                                                                                           |
-| ----------------------------------------- | --------------------------------------------------- | ---------------- | ------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Duplicated payment verification logic     | `src/routes/return.ts`, `src/routes/webhook.ts`     | Code Duplication | Medium | Low    | High     | Resolved — shared `assertCheckoutIntegrity` (`src/lib/payment-integrity.ts`), called from `src/usecases/process-return.ts` and `src/usecases/process-webhook.ts` |
-| Direct D1 calls in route handlers         | `src/routes/checkout.ts`, `return.ts`, `webhook.ts` | Architecture     | Medium | Medium | High     | Resolved — routes are thin adapters over `src/usecases/*`; all D1 access lives in `src/lib/db.ts`                                                                |
-| String literal error codes                | `src/lib/payment-integrity.ts`, routes              | Maintainability  | Low    | Low    | Medium   | Resolved — `PaymentIntegrityCode` and `CatalogError.code` are typed string-literal unions, not ad hoc strings                                                    |
-| Lack of circuit breaker for external APIs | `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`    | Resilience       | High   | Medium | High     | Resolved — `src/lib/circuit-breaker.ts` wraps all outbound calls in both clients                                                                                 |
-| Static `/health` endpoint                 | `src/index.ts`                                      | Operational      | Low    | Low    | Medium   | Resolved — `/health?deep=1` pings D1 and KV, returns 503 on failure                                                                                              |
+| Item                                      | Location                                            | Type             | Risk   | Effort | Priority | Status                                                                                                                                                                                                                                                |
+| ----------------------------------------- | --------------------------------------------------- | ---------------- | ------ | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Duplicated payment verification logic     | `src/routes/return.ts`, `src/routes/webhook.ts`     | Code Duplication | Medium | Low    | High     | Resolved — shared `assertCheckoutIntegrity` (`src/lib/payment-integrity.ts`), called from `src/usecases/process-return.ts` and `src/usecases/process-webhook.ts`                                                                                      |
+| Direct D1 calls in route handlers         | `src/routes/checkout.ts`, `return.ts`, `webhook.ts` | Architecture     | Medium | Medium | High     | Resolved — routes are thin adapters over `src/usecases/*`; all D1 access lives in `src/lib/db.ts`                                                                                                                                                     |
+| String literal error codes                | `src/lib/payment-integrity.ts`, routes              | Maintainability  | Low    | Low    | Medium   | Resolved — `PaymentIntegrityCode` and `CatalogError.code` are typed string-literal unions, not ad hoc strings                                                                                                                                         |
+| Lack of circuit breaker for external APIs | `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`    | Resilience       | High   | Medium | High     | Resolved — `src/lib/circuit-breaker.ts` wraps all outbound calls in both clients                                                                                                                                                                      |
+| Static `/health` endpoint                 | `src/index.ts`                                      | Operational      | Low    | Low    | Medium   | Resolved — `/health?deep=1` pings D1 and KV, returns 503 on failure                                                                                                                                                                                   |
+| Breaker trial is not single-flight        | `src/lib/circuit-breaker.ts`                        | Resilience       | Low    | Low    | Low      | Open — `openedAt` stays set until the trial resolves, so every concurrent request in the isolate is admitted the moment the 30 s cooldown elapses, instead of one trial call. Per-isolate scope caps the blast radius; fix is an in-flight-trial flag |
 
 ---
 
@@ -48,10 +49,11 @@
 
 ---
 
-## Status as of 2026-07-29
+## Status as of 2026-08-01
 
-Every item above is closed. The remaining backlog for this project is entirely
+One low-priority item is open: the non-single-flight circuit-breaker trial. Every
+other item above is closed. The rest of the backlog for this project is entirely
 external — see `DEPLOYMENT_GATE.md` for the non-negotiable blockers (real
 Verifone/Landsbankinn credentials, production Cloudflare resources, storefront
-contract migration, vendor-signed sandbox proof). None of it can be closed from
-inside this repository.
+contract migration, `PUBLIC_API_URL` return-path routing, vendor-signed sandbox
+proof). None of it can be closed from inside this repository.
