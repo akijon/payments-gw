@@ -65,8 +65,8 @@ Circuit breaker implementation: `src/lib/circuit-breaker.ts` — threshold 5 con
 
 The integration-point audit above has no open rows on the payment path — every outbound call has a timeout, and both providers are behind a breaker. These three remain and are tracked elsewhere rather than duplicated here:
 
-| Item                                                  | Blocking?                                        | Owner / tracker                                                                 |
-| ----------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `PUBLIC_API_URL` `/api/return` must reach this Worker | Yes — customer stranded after payment if it 404s | External routing; gate item in `DEPLOYMENT_GATE.md`                             |
-| Checkout-creation retry policy                        | No — fail-fast is safe                           | Four vendor questions in `SANDBOX_E2E_GATE.md`                                  |
-| Breaker trial is not single-flight                    | No — per-isolate blast radius                    | Debt Ledger row in `docs/TECH-DEBT.md`; behavior unpinned per `docs/TESTING.md` |
+| Item                                                  | Blocking?                                                       | Owner / tracker                                                                          |
+| ----------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `PUBLIC_API_URL` `/api/return` must reach this Worker | Sandbox verified 2026-08-02; production origin still unverified | `scripts/verify-return-routing.sh`; gate item in `DEPLOYMENT_GATE.md`                    |
+| Checkout-creation retry policy                        | No — fail-fast is safe                                          | `scripts/probe-verifone-idempotency.sh` + four vendor questions in `SANDBOX_E2E_GATE.md` |
+| Breaker trial is not single-flight                    | No — per-isolate blast radius                                   | Debt Ledger row in `docs/TECH-DEBT.md`; behavior unpinned per `docs/TESTING.md`          |

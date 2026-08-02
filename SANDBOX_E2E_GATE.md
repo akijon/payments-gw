@@ -7,7 +7,7 @@ Run this only against the dedicated sandbox Worker and sandbox Verifone/Landsban
 - [ ] Replace the `products` seed rows with the approved merchant catalog before any production migration. The repository currently contains development fixtures only; no real catalog was supplied, so it was deliberately not invented.
 - [ ] Configure all ten Worker secrets in the sandbox Worker.
 - [ ] Apply migrations through `0007_order_number_index.sql` to the sandbox D1 database using `npm run db:migrate:sandbox`.
-- [ ] Set the sandbox webhook URL to `https://<sandbox-worker>/api/webhooks/verifone` — the Worker's own origin, deliberately not `PUBLIC_API_URL`. Webhooks are server-to-server with no browser origin to match, and detached-JWS verification needs the byte-exact request body, so they must not pass through the storefront proxy. Browser returns are the opposite case: they use `PUBLIC_API_URL` (see `DEPLOYMENT_GATE.md`).
+- [ ] Set the sandbox webhook URL to `https://<sandbox-worker>/api/webhooks/verifone` — the Worker's own origin, deliberately not `PUBLIC_API_URL`. Webhooks are server-to-server, so there is no browser origin to match, and delivery should not depend on the storefront being up. The storefront proxy would in fact preserve the body byte-exactly (it forwards the `Request` unchanged over a service binding, so detached-JWS verification would still pass) — the reason to keep webhooks direct is one less hop and one less dependency on the payment-confirmation path, not signature safety. Browser returns are the opposite case: they must use `PUBLIC_API_URL` (see `DEPLOYMENT_GATE.md`).
 - [ ] Obtain a vendor-signed Verifone fixture or perform the test from Verifone Sandbox.
 
 ## Required evidence
@@ -37,7 +37,9 @@ header, and no page documents what a replayed key returns. `merchant_reference` 
 identifier, not as a uniqueness or deduplication constraint.
 
 This is why the gateway does not retry checkout creation (see `docs/RELIABILITY.md`). Answer these
-against the sandbox tenant — or in writing from Verifone — before any retry logic is added:
+against the sandbox tenant with `scripts/probe-verifone-idempotency.sh` — or in writing from
+Verifone — before any retry logic is added. A `2xx` on a replay proves nothing on its own: unknown
+headers are silently dropped, so only a matching checkout `id` demonstrates idempotency.
 
 - [ ] Does `POST /v2/checkout` honor `x-vfi-api-idempotencykey` at all?
 - [ ] Same key + identical body: does it return the original checkout, or create a second one?
