@@ -3,7 +3,12 @@
  */
 
 import type { Env } from '../types/env';
-import type { VerifoneCheckoutResponse, VerifoneCheckoutDetail } from '../types/api';
+import type {
+  VerifoneCheckoutConfigurations,
+  VerifoneCheckoutDetail,
+  VerifoneCheckoutRequest,
+  VerifoneCheckoutResponse,
+} from '../types/api';
 import { withCircuitBreaker } from './circuit-breaker';
 
 // ─── OAuth2 token management ─────────────────────────────────────
@@ -17,8 +22,77 @@ const TOKEN_KEY = 'verifone_oauth_token';
 const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
 const UPSTREAM_TIMEOUT_MS = 15_000;
 
+export interface BuildVerifoneCheckoutRequestParams {
+  orderNumber: string;
+  amount: number; // minor units
+  currency: string; // ISO 4217 uppercase, e.g. "ISK"
+  returnUrl: string;
+}
+
 function upstreamError(operation: string, response: Response): Error {
   return new Error(`${operation} failed with HTTP ${response.status}`);
+}
+
+/** Non-empty after trim → usable contract ID; otherwise treat as unset. */
+function configuredContractId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Pure Verifone HPP checkout request builder.
+ *
+ * Card is always included from the existing PPC + 3DS contracts.
+ * Wallet methods are env-gated and fail-closed: omit the key unless a
+ * non-empty contract ID is provisioned. PayPal is additionally suppressed
+ * for ISK until Task 0 confirms currency/FX support.
+ */
+export function buildVerifoneCheckoutRequest(
+  env: Env,
+  params: BuildVerifoneCheckoutRequestParams,
+): VerifoneCheckoutRequest {
+  if (!Number.isSafeInteger(params.amount) || params.amount <= 0 || !/^[A-Z]{3}$/.test(params.currency)) {
+    throw new Error('Invalid checkout amount or currency');
+  }
+
+  const configurations: VerifoneCheckoutConfigurations = {
+    card: {
+      mode: '3DS_PAYMENT',
+      payment_contract_id: env.VERIFONE_PAYMENT_CONTRACT_ID,
+      capture_now: true,
+      threed_secure: {
+        enabled: true,
+        threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
+      },
+    },
+  };
+
+  const paypalContractId = configuredContractId(env.VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID);
+  // Temporary fail-closed: public PayPal currency list omits ISK; do not emit
+  // paypal until Task 0 confirms the tenant contract accepts ISK (or FX path).
+  if (paypalContractId && params.currency !== 'ISK') {
+    configurations.paypal = { payment_contract_id: paypalContractId };
+  }
+
+  const applePayContractId = configuredContractId(env.VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID);
+  if (applePayContractId) {
+    configurations.apple_pay = { payment_contract_id: applePayContractId };
+  }
+
+  const googlePayContractId = configuredContractId(env.VERIFONE_GOOGLE_PAY_PAYMENT_CONTRACT_ID);
+  if (googlePayContractId) {
+    configurations.google_pay = { payment_contract_id: googlePayContractId };
+  }
+
+  return {
+    entity_id: env.VERIFONE_ENTITY_ID,
+    currency_code: params.currency,
+    amount: params.amount,
+    merchant_reference: params.orderNumber,
+    return_url: params.returnUrl,
+    interaction_type: 'HPP',
+    configurations,
+  };
 }
 
 export async function getVerifoneToken(env: Env): Promise<string> {
@@ -74,37 +148,12 @@ export async function getVerifoneToken(env: Env): Promise<string> {
 
 export async function createCheckout(
   env: Env,
-  params: {
-    orderNumber: string;
-    amount: number; // minor units
-    currency: string; // "ISK"
-    returnUrl: string;
-  },
+  params: BuildVerifoneCheckoutRequestParams,
 ): Promise<{ checkoutId: string; checkoutUrl: string }> {
-  if (!Number.isSafeInteger(params.amount) || params.amount <= 0 || !/^[A-Z]{3}$/.test(params.currency)) {
-    throw new Error('Invalid checkout amount or currency');
-  }
+  // Validation + configurations live in the pure builder so unit tests can
+  // pin HPP method gating without mocking fetch/OAuth.
+  const body = buildVerifoneCheckoutRequest(env, params);
   const token = await getVerifoneToken(env);
-
-  const body = {
-    entity_id: env.VERIFONE_ENTITY_ID,
-    currency_code: params.currency,
-    amount: params.amount,
-    merchant_reference: params.orderNumber,
-    return_url: params.returnUrl,
-    interaction_type: 'HPP' as const,
-    configurations: {
-      card: {
-        mode: '3DS_PAYMENT' as const,
-        payment_contract_id: env.VERIFONE_PAYMENT_CONTRACT_ID,
-        capture_now: true,
-        threed_secure: {
-          enabled: true,
-          threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
-        },
-      },
-    },
-  };
 
   const resp = await withCircuitBreaker('verifone', () =>
     fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {

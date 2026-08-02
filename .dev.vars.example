@@ -6,6 +6,11 @@ VERIFONE_ENTITY_ID="sandbox-entity-id-placeholder"
 VERIFONE_PAYMENT_CONTRACT_ID="sandbox-payment-contract-placeholder"
 VERIFONE_3DS_CONTRACT_ID="sandbox-3ds-contract-placeholder"
 VERIFONE_JWKS_URL="https://vf11gtostorage1.blob.core.windows.net/test-webhook-sign-keys/test-webhook-sign-keys.jwks"
+# Optional wallet HPP contracts (unset/blank = method omitted; fail-closed).
+# Do not set in production until Task 0 method matrix is signed off.
+# VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID="sandbox-paypal-contract-placeholder"
+# VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID="sandbox-apple-pay-contract-placeholder"
+# VERIFONE_GOOGLE_PAY_PAYMENT_CONTRACT_ID="sandbox-google-pay-contract-placeholder"
 
 # Landsbankinn Acquiring API (reconciliation — can be deferred)
 LANDSBANKINN_CLIENT_ID="sandbox-placeholder"

@@ -50,6 +50,32 @@ export interface Order {
 
 // ─── Verifone types ──────────────────────────────────────────────
 
+/** Nested wallet config: contract ID only until Task 0 confirms extra fields. */
+export interface VerifoneWalletConfiguration {
+  payment_contract_id: string;
+}
+
+export interface VerifoneCardConfiguration {
+  mode: 'PAYMENT' | '3DS_PAYMENT' | '3DS' | 'CARD_CAPTURE';
+  payment_contract_id: string;
+  capture_now: boolean;
+  threed_secure?: {
+    enabled: boolean;
+    threeds_contract_id: string;
+  };
+}
+
+/**
+ * Provider request configurations. Card is always present.
+ * Wallet keys are omitted (not undefined) when the corresponding Env contract is unset.
+ */
+export interface VerifoneCheckoutConfigurations {
+  card: VerifoneCardConfiguration;
+  paypal?: VerifoneWalletConfiguration;
+  apple_pay?: VerifoneWalletConfiguration;
+  google_pay?: VerifoneWalletConfiguration;
+}
+
 export interface VerifoneCheckoutRequest {
   entity_id: string;
   currency_code: string;
@@ -57,17 +83,7 @@ export interface VerifoneCheckoutRequest {
   merchant_reference: string;
   return_url: string;
   interaction_type: 'HPP' | 'IFRAME' | 'PAYMENT_LINK';
-  configurations: {
-    card: {
-      mode: 'PAYMENT' | '3DS_PAYMENT' | '3DS' | 'CARD_CAPTURE';
-      payment_contract_id: string;
-      capture_now: boolean;
-      threed_secure?: {
-        enabled: boolean;
-        threeds_contract_id: string;
-      };
-    };
-  };
+  configurations: VerifoneCheckoutConfigurations;
 }
 
 export interface VerifoneCheckoutResponse {
