@@ -1,8 +1,9 @@
 /**
  * Pure unit tests for buildVerifoneCheckoutRequest.
  *
- * Task 1 (verifone-wallets-paypal): env-gated wallet configurations.
- * Capability = non-empty trimmed contract ID. Missing/blank → omit key (fail-closed).
+ * Task 1 (verifone-wallets-paypal): env-gated acquirer wallet configurations.
+ * Apple Pay/Google Pay require non-empty contract IDs; PayPal remains disabled
+ * until currency support and settlement workflow are approved.
  * No fetch, no D1 — pure data builder only.
  */
 
@@ -55,14 +56,14 @@ describe('buildVerifoneCheckoutRequest', () => {
     expect(Object.keys(body.configurations).sort()).toEqual(['card']);
   });
 
-  it('adds paypal when VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID is non-empty (non-ISK)', () => {
+  it('omits paypal even when a contract is configured until settlement support exists', () => {
     const body = buildVerifoneCheckoutRequest(testEnv({ VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID: 'paypal-ppc-1' }), {
       ...BASE_PARAMS,
     });
 
     expect(body.configurations.card).toEqual(CARD_ONLY_CONFIG.card);
-    expect(body.configurations.paypal).toEqual({ payment_contract_id: 'paypal-ppc-1' });
-    expect(Object.keys(body.configurations).sort()).toEqual(['card', 'paypal']);
+    expect(body.configurations).not.toHaveProperty('paypal');
+    expect(Object.keys(body.configurations).sort()).toEqual(['card']);
   });
 
   it('adds apple_pay when VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID is non-empty', () => {
@@ -85,7 +86,7 @@ describe('buildVerifoneCheckoutRequest', () => {
     expect(Object.keys(body.configurations).sort()).toEqual(['card', 'google_pay']);
   });
 
-  it('includes all configured wallets alongside card', () => {
+  it('includes only settlement-supported configured wallets alongside card', () => {
     const body = buildVerifoneCheckoutRequest(
       testEnv({
         VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID: 'paypal-ppc-1',
@@ -95,8 +96,8 @@ describe('buildVerifoneCheckoutRequest', () => {
       { ...BASE_PARAMS },
     );
 
-    expect(Object.keys(body.configurations).sort()).toEqual(['apple_pay', 'card', 'google_pay', 'paypal']);
-    expect(body.configurations.paypal).toEqual({ payment_contract_id: 'paypal-ppc-1' });
+    expect(Object.keys(body.configurations).sort()).toEqual(['apple_pay', 'card', 'google_pay']);
+    expect(body.configurations).not.toHaveProperty('paypal');
     expect(body.configurations.apple_pay).toEqual({ payment_contract_id: 'apple-ppc-1' });
     expect(body.configurations.google_pay).toEqual({ payment_contract_id: 'google-ppc-1' });
   });
@@ -119,30 +120,37 @@ describe('buildVerifoneCheckoutRequest', () => {
     expect(JSON.stringify(body.configurations)).toBe(JSON.stringify(CARD_ONLY_CONFIG));
   });
 
-  it('trims wallet contract IDs before emitting them', () => {
+  it('trims supported wallet contract IDs before emitting them', () => {
     const body = buildVerifoneCheckoutRequest(
-      testEnv({ VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID: '  paypal-ppc-trimmed  ' }),
+      testEnv({
+        VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID: '  paypal-ppc-not-enabled  ',
+        VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID: '  apple-ppc-trimmed  ',
+      }),
       { ...BASE_PARAMS },
     );
 
-    expect(body.configurations.paypal).toEqual({ payment_contract_id: 'paypal-ppc-trimmed' });
-  });
-
-  it('omits paypal for ISK even when a PayPal contract is configured (fail-closed until Task 0)', () => {
-    const body = buildVerifoneCheckoutRequest(
-      testEnv({
-        VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID: 'paypal-ppc-1',
-        VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID: 'apple-ppc-1',
-      }),
-      { ...BASE_PARAMS, currency: 'ISK' },
-    );
-
-    expect(body.currency_code).toBe('ISK');
     expect(body.configurations).not.toHaveProperty('paypal');
-    // Apple Pay remains acquirer-settled; ISK gate is PayPal-only.
-    expect(body.configurations.apple_pay).toEqual({ payment_contract_id: 'apple-ppc-1' });
-    expect(Object.keys(body.configurations).sort()).toEqual(['apple_pay', 'card']);
+    expect(body.configurations.apple_pay).toEqual({ payment_contract_id: 'apple-ppc-trimmed' });
   });
+
+  it.each(['EUR', 'ISK'] as const)(
+    'omits paypal for %s until currency and settlement support are approved',
+    (currency) => {
+      const body = buildVerifoneCheckoutRequest(
+        testEnv({
+          VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID: 'paypal-ppc-1',
+          VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID: 'apple-ppc-1',
+        }),
+        { ...BASE_PARAMS, currency },
+      );
+
+      expect(body.currency_code).toBe(currency);
+      expect(body.configurations).not.toHaveProperty('paypal');
+      // Apple Pay remains acquirer-settled and independently configurable.
+      expect(body.configurations.apple_pay).toEqual({ payment_contract_id: 'apple-ppc-1' });
+      expect(Object.keys(body.configurations).sort()).toEqual(['apple_pay', 'card']);
+    },
+  );
 
   it('rejects invalid amount or currency before any configuration is built', () => {
     expect(() => buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, amount: 0 })).toThrow(

@@ -6,8 +6,8 @@
 
 **Current State**:
 
-- Gateway implementation and test coverage complete: 132 tests passing
-- PayPal configuration is correctly suppressed for ISK (fail-closed until currency resolution)
+- Gateway implementation and test coverage complete: 136 tests passing
+- PayPal configuration is suppressed for every currency until currency support and a settlement workflow exist
 - Existing card/3DS HPP flow remains unchanged
 - PayPal orders are identified after server-side verification and excluded from Landsbankinn reconciliation
 
@@ -17,7 +17,7 @@
 
 PayPal does not support ISK natively, while the Irja catalog and checkout are ISK-denominated.
 
-**Decision — 2026-08-02:** Keep the storefront **ISK/card-only**. PayPal remains unavailable and its Verifone HPP configuration stays suppressed for ISK.
+**Decision — 2026-08-02:** Keep the storefront **ISK/card-only**. PayPal remains unavailable and its Verifone HPP configuration stays suppressed until a supported currency and settlement workflow are approved.
 
 This is intentional, not a partial rollout. Revisit only with a separately scoped multi-currency checkout design, EUR product pricing, FX ownership, and real sandbox validation.
 
@@ -104,7 +104,7 @@ Update `reconcile.ts` to:
 
 ### Unit and integration tests
 
-- [x] PayPal configuration builder and ISK fail-closed gate
+- [x] PayPal configuration omission and settlement-safety gate
 - [x] Payment method normalization from provider checkout details
 - [x] Verified return persists `payment_method = 'paypal'`
 - [x] Verified webhook persists `payment_method = 'paypal'`
@@ -117,7 +117,7 @@ Update `reconcile.ts` to:
 
 ### Fail-Safe Gates
 
-1. **ISK suppression**: PayPal omitted until currency resolved
+1. **Settlement-safe suppression**: PayPal omitted until currency and settlement workflow are resolved
 2. **Contract validation**: Empty contract ID = no PayPal option
 3. **Settlement isolation**: PayPal orders can't corrupt Landsbankinn reconciliation
 

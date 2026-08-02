@@ -77,9 +77,9 @@ export function normalizePaymentMethod(paymentProduct?: string): PaymentMethod {
  * Pure Verifone HPP checkout request builder.
  *
  * Card is always included from the existing PPC + 3DS contracts.
- * Wallet methods are env-gated and fail-closed: omit the key unless a
- * non-empty contract ID is provisioned. PayPal is additionally suppressed
- * for ISK until Task 0 confirms currency/FX support.
+ * Apple Pay and Google Pay are env-gated and fail-closed: omit the key unless
+ * a non-empty acquirer contract ID is provisioned. PayPal stays suppressed
+ * until both currency support and an operational settlement path exist.
  */
 export function buildVerifoneCheckoutRequest(
   env: Env,
@@ -100,13 +100,6 @@ export function buildVerifoneCheckoutRequest(
       },
     },
   };
-
-  const paypalContractId = configuredContractId(env.VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID);
-  // Temporary fail-closed: public PayPal currency list omits ISK; do not emit
-  // paypal until Task 0 confirms the tenant contract accepts ISK (or FX path).
-  if (paypalContractId && params.currency !== 'ISK') {
-    configurations.paypal = { payment_contract_id: paypalContractId };
-  }
 
   const applePayContractId = configuredContractId(env.VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID);
   if (applePayContractId) {
