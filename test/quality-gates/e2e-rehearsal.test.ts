@@ -22,6 +22,7 @@ vi.mock('../../src/lib/verifone', () => ({
   createCheckout: vi.fn(),
   getCheckout: vi.fn(),
   parseCheckoutResult: vi.fn(),
+  normalizePaymentMethod: vi.fn().mockReturnValue('card'),
 }));
 
 vi.mock('../../src/lib/crypto', () => ({

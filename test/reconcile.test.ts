@@ -119,6 +119,36 @@ describe('reconcile', () => {
     expect(stored?.status).toBe('failed');
   });
 
+  it('does not send a verified PayPal order through Landsbankinn settlement matching', async () => {
+    const { reconcile } = await import('../src/cron/reconcile');
+    const order = await seedOrder('paid');
+    await env.DB.prepare("UPDATE orders SET payment_method = 'paypal' WHERE id = ?").bind(order.id).run();
+    const dependencies = reconciliationDependencies([
+      {
+        id: 'acquirer-txn-paypal',
+        merchantReference: order.orderNumber,
+        amount: 18000,
+        currency: 'ISK',
+        transactionType: 'SALE',
+        transactionStatus: 'SETTLED',
+      },
+    ]);
+
+    await (reconcile as unknown as ReconcileWithDependencies)(env, dependencies);
+
+    const stored = await env.DB.prepare('SELECT status, landsbankinn_settlement_id FROM orders WHERE id = ?')
+      .bind(order.id)
+      .first<{ status: string; landsbankinn_settlement_id: string | null }>();
+    expect(stored).toEqual({ status: 'paid', landsbankinn_settlement_id: null });
+    const exception = await env.DB.prepare(
+      'SELECT reason, details_json FROM reconciliation_exceptions WHERE transaction_id = ?',
+    )
+      .bind('acquirer-txn-paypal')
+      .first<{ reason: string; details_json: string }>();
+    expect(exception?.reason).toBe('non_card_payment_method');
+    expect(JSON.parse(exception!.details_json)).toMatchObject({ payment_method: 'paypal', order_id: order.id });
+  });
+
   it('does not settle a paid order when the acquiring amount differs', async () => {
     const { reconcile } = await import('../src/cron/reconcile');
     const order = await seedOrder('paid');

@@ -10,6 +10,7 @@ vi.mock('../src/lib/verifone', () => ({
   createCheckout: vi.fn(),
   getCheckout: vi.fn(),
   parseCheckoutResult: vi.fn(),
+  normalizePaymentMethod: vi.fn().mockReturnValue('card'),
 }));
 
 beforeEach(async () => {
@@ -78,6 +79,33 @@ describe('GET /api/return', () => {
     expect(order!.status).toBe('paid');
     expect(order!.paid_at).not.toBeNull();
     expect(order!.verifone_transaction_id).toBe('txn-success-1');
+  });
+
+  it('persists PayPal after a server-verified successful return', async () => {
+    const orderId = await seedOrder();
+    const { getCheckout, parseCheckoutResult, normalizePaymentMethod } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: 'chk-return-1',
+      status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-TEST',
+      transaction_id: 'txn-paypal-return',
+      payment_product: 'PAYPAL',
+      events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-paypal-return', timestamp: '2026-07-25T10:00:00Z' }],
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({ status: 'success', transactionId: 'txn-paypal-return' });
+    vi.mocked(normalizePaymentMethod).mockReturnValueOnce('paypal');
+
+    const response = await SELF.fetch(
+      `https://test.example.com/api/return?order_id=${orderId}&transaction_id=txn-paypal-return&checkout_id=chk-return-1`,
+      { redirect: 'manual' },
+    );
+
+    expect(response.headers.get('location')).toContain('status=paid');
+    const order = await env.DB.prepare('SELECT status, payment_method FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order).toMatchObject({ status: 'paid', payment_method: 'paypal' });
+    expect(normalizePaymentMethod).toHaveBeenCalledWith('PAYPAL');
   });
 
   it('redirects with error status on transaction_id mismatch', async () => {

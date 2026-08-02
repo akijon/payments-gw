@@ -17,6 +17,7 @@ vi.mock('../../src/lib/verifone', () => ({
     transaction_id: 'txn-1',
   }),
   parseCheckoutResult: vi.fn().mockReturnValue({ status: 'success', transactionId: 'txn-1' }),
+  normalizePaymentMethod: vi.fn().mockReturnValue('card'),
 }));
 
 vi.mock('../../src/lib/crypto', () => ({

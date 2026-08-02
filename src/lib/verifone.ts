@@ -4,6 +4,7 @@
 
 import type { Env } from '../types/env';
 import type {
+  PaymentMethod,
   VerifoneCheckoutConfigurations,
   VerifoneCheckoutDetail,
   VerifoneCheckoutRequest,
@@ -37,6 +38,39 @@ function upstreamError(operation: string, response: Response): Error {
 function configuredContractId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Normalize Verifone payment_product value to PaymentMethod enum.
+ * Maps provider-specific values to standardized types for database storage.
+ */
+export function normalizePaymentMethod(paymentProduct?: string): PaymentMethod {
+  if (!paymentProduct) return 'unknown';
+
+  const product = paymentProduct.toUpperCase().trim();
+
+  switch (product) {
+    case 'PAYPAL':
+      return 'paypal';
+    case 'APPLEPAY':
+    case 'APPLE_PAY':
+      return 'apple_pay';
+    case 'GOOGLEPAY':
+    case 'GOOGLE_PAY':
+      return 'google_pay';
+    case 'VISA':
+    case 'MASTERCARD':
+    case 'AMEX':
+    case 'AMERICANEXPRESS':
+    case 'DISCOVER':
+    case 'JCB':
+    case 'DINERS':
+    case 'MAESTRO':
+      return 'card';
+    default:
+      // Never route an unrecognized provider product through card settlement.
+      return 'unknown';
+  }
 }
 
 /**

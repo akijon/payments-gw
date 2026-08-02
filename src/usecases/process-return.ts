@@ -45,6 +45,8 @@ export async function processReturnUseCase(env: Env, input: ProcessReturnInput):
   try {
     const detail = await getCheckout(env, storedCheckoutId);
     const result = parseCheckoutResult(detail);
+    const { normalizePaymentMethod } = await import('../lib/verifone');
+    const paymentMethod = normalizePaymentMethod(detail.payment_product);
 
     try {
       assertCheckoutIntegrity(detail, {
@@ -93,6 +95,7 @@ export async function processReturnUseCase(env: Env, input: ProcessReturnInput):
         status: 'paid',
         eventType: 'transaction_success',
         transactionId: verifiedTransactionId,
+        paymentMethod,
         rawPayload: JSON.stringify({
           checkout_id: detail.id,
           amount: detail.amount,
@@ -109,6 +112,7 @@ export async function processReturnUseCase(env: Env, input: ProcessReturnInput):
         status: 'failed',
         eventType: 'transaction_failed',
         transactionId: verifiedTransactionId,
+        paymentMethod,
         rawPayload: JSON.stringify({
           checkout_id: detail.id,
           amount: detail.amount,
