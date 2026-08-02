@@ -137,10 +137,10 @@ export async function reconcile(
           continue;
         }
 
-        // Exclude PayPal and other wallet payments from Landsbankinn reconciliation
-        // PayPal transactions settle directly to the PayPal account, not through Landsbankinn
+        // Exclude PayPal and unknown payment methods from Landsbankinn reconciliation.
+        // Apple Pay and Google Pay are acquirer-backed card payments and reconcile here.
         const paymentMethod = order.payment_method ?? 'unknown';
-        if (paymentMethod !== 'card') {
+        if (paymentMethod === 'paypal' || paymentMethod === 'unknown') {
           await recordReconciliationException(env.DB, {
             runId,
             settlementId: settlement.id,
@@ -151,7 +151,7 @@ export async function reconcile(
               order_id: order.id,
             },
           });
-          console.log('Excluding non-card payment from Landsbankinn reconciliation', {
+          console.log('Excluding non-acquirer payment from Landsbankinn reconciliation', {
             orderId: order.id,
             paymentMethod,
             transactionId: transaction.id,

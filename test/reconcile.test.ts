@@ -149,6 +149,32 @@ describe('reconcile', () => {
     expect(JSON.parse(exception!.details_json)).toMatchObject({ payment_method: 'paypal', order_id: order.id });
   });
 
+  it.each(['apple_pay', 'google_pay'] as const)(
+    'reconciles %s through Landsbankinn settlement matching',
+    async (paymentMethod) => {
+      const { reconcile } = await import('../src/cron/reconcile');
+      const order = await seedOrder('paid');
+      await env.DB.prepare('UPDATE orders SET payment_method = ? WHERE id = ?').bind(paymentMethod, order.id).run();
+      const dependencies = reconciliationDependencies([
+        {
+          id: `acquirer-txn-${paymentMethod}`,
+          merchantReference: order.orderNumber,
+          amount: 18000,
+          currency: 'ISK',
+          transactionType: 'SALE',
+          transactionStatus: 'SETTLED',
+        },
+      ]);
+
+      await (reconcile as unknown as ReconcileWithDependencies)(env, dependencies);
+
+      const stored = await env.DB.prepare('SELECT status, landsbankinn_settlement_id FROM orders WHERE id = ?')
+        .bind(order.id)
+        .first<{ status: string; landsbankinn_settlement_id: string | null }>();
+      expect(stored).toEqual({ status: 'settled', landsbankinn_settlement_id: 'settlement-1' });
+    },
+  );
+
   it('does not settle a paid order when the acquiring amount differs', async () => {
     const { reconcile } = await import('../src/cron/reconcile');
     const order = await seedOrder('paid');
