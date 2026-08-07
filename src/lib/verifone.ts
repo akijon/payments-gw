@@ -11,13 +11,9 @@ import type {
   VerifoneCheckoutResponse,
 } from '../types/api';
 import { withCircuitBreaker } from './circuit-breaker';
+import { getOAuth2ClientCredentialsToken } from './oauth';
 
 // ─── OAuth2 token management ─────────────────────────────────────
-
-interface CachedToken {
-  token: string;
-  expiresAt: number; // epoch ms
-}
 
 const TOKEN_KEY = 'verifone_oauth_token';
 const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
@@ -123,52 +119,18 @@ export function buildVerifoneCheckoutRequest(
 }
 
 export async function getVerifoneToken(env: Env): Promise<string> {
-  // 1. Check KV cache
-  const cached = await env.CACHE.get<CachedToken>(TOKEN_KEY, 'json');
-  if (cached && cached.expiresAt > Date.now() + TOKEN_BUFFER_MS) {
-    return cached.token;
-  }
-
-  // 2. Request new token via client credentials grant
-  const resp = await withCircuitBreaker('verifone', () =>
-    fetch(env.VERIFONE_OAUTH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: env.VERIFONE_CLIENT_ID,
-        client_secret: env.VERIFONE_CLIENT_SECRET,
-        scope: env.VERIFONE_SCOPE,
-      }),
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    }),
-  );
-
-  if (!resp.ok) {
-    throw upstreamError('Verifone OAuth2', resp);
-  }
-
-  const data = (await resp.json()) as { access_token?: unknown; expires_in?: unknown };
-  if (
-    typeof data.access_token !== 'string' ||
-    data.access_token.length === 0 ||
-    typeof data.expires_in !== 'number' ||
-    !Number.isFinite(data.expires_in) ||
-    data.expires_in <= 30
-  ) {
-    throw new Error('Verifone OAuth2 returned an invalid token response');
-  }
-  const token: CachedToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
-
-  // 3. Cache in KV with TTL
-  await env.CACHE.put(TOKEN_KEY, JSON.stringify(token), {
-    expirationTtl: Math.max(60, Math.floor(data.expires_in - TOKEN_BUFFER_MS / 1000)),
+  return getOAuth2ClientCredentialsToken({
+    cache: env.CACHE,
+    cacheKey: TOKEN_KEY,
+    breakerKey: 'verifone',
+    tokenUrl: env.VERIFONE_OAUTH_URL,
+    clientId: env.VERIFONE_CLIENT_ID,
+    clientSecret: env.VERIFONE_CLIENT_SECRET,
+    scope: env.VERIFONE_SCOPE,
+    operation: 'Verifone OAuth2',
+    bufferMs: TOKEN_BUFFER_MS,
+    timeoutMs: UPSTREAM_TIMEOUT_MS,
   });
-
-  return token.token;
 }
 
 // ─── Create checkout session ────────────────────────────────────

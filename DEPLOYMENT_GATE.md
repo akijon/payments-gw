@@ -19,7 +19,7 @@ This document supersedes readiness claims in older checklist/status documents. A
 - [ ] Create isolated production D1, KV, and Rate Limiting resources and create ignored `wrangler.production.toml` from the example.
 - [ ] Supply a least-privilege Cloudflare API token with Worker deploy, secret-list, D1, KV, and rate-limit permissions for only this account/project.
 - [ ] Configure all required production secrets; do not store their values in Git, logs, or this document.
-- [ ] Apply and verify migrations `0001`–`0006` with `wrangler d1 migrations apply` after a tested backup/rollback plan.
+- [ ] Apply and verify migrations `0001`–`0008` with `wrangler d1 migrations apply` after a tested backup/rollback plan.
 - [ ] Replace the live storefront's `/api/teya/checkout` contract and Teya branding with the documented Verifone contract; verify product identifiers and prices come from the same canonical catalog.
 - [ ] Configure `PUBLIC_API_URL` and route its `/api/return` path to this Worker; the current `https://irja.khalipa.net/api/return` responds with 404.
 - [ ] Configure and verify Cloudflare dashboard WAF/rate-limit rules from `docs/edge-security.md`.

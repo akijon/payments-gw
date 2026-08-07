@@ -6,7 +6,7 @@ Run this only against the dedicated sandbox Worker and sandbox Verifone/Landsban
 
 - [ ] Replace the `products` seed rows with the approved merchant catalog before any production migration. The repository currently contains development fixtures only; no real catalog was supplied, so it was deliberately not invented.
 - [ ] Configure all ten Worker secrets in the sandbox Worker.
-- [ ] Apply migrations through `0006_reconciliation_runs.sql` to the sandbox D1 database using `npm run db:migrate:sandbox`.
+- [ ] Apply migrations through `0008_payment_method.sql` to the sandbox D1 database using `npm run db:migrate:sandbox`.
 - [ ] Set the sandbox callback/webhook URL to `https://<sandbox-worker>/api/webhooks/verifone`.
 - [ ] Obtain a vendor-signed Verifone fixture or perform the test from Verifone Sandbox.
 
