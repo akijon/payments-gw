@@ -8,7 +8,7 @@
  */
 
 import type { Env } from '../types/env';
-import type { VerifoneWebhookPayload } from '../types/api';
+import type { VerifoneWebhookPayload, PaymentMethod } from '../types/api';
 import { PaymentIntegrityError, assertCheckoutIntegrity } from '../lib/payment-integrity';
 
 const ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
@@ -122,9 +122,10 @@ export async function processWebhookUseCase(env: Env, rawBody: string): Promise<
   }
 
   let verifiedTransactionId: string | undefined;
+  let paymentMethod: PaymentMethod | undefined;
   if (orderStatus === 'paid' || orderStatus === 'refunded' || orderStatus === 'failed') {
     try {
-      const { getCheckout, parseCheckoutResult } = await import('../lib/verifone');
+      const { getCheckout, parseCheckoutResult, normalizePaymentMethod } = await import('../lib/verifone');
       const detail = await getCheckout(env, checkoutId);
       assertCheckoutIntegrity(detail, {
         checkoutId,
@@ -133,6 +134,11 @@ export async function processWebhookUseCase(env: Env, rawBody: string): Promise<
         merchantReference: order.order_number,
         requireTransactionId: orderStatus === 'paid',
       });
+
+      // Extract payment method from provider response and webhook content
+      const paymentMethodFromDetail = normalizePaymentMethod(detail.payment_product);
+      const paymentMethodFromWebhook = normalizePaymentMethod(payload.content?.payment_product);
+      paymentMethod = paymentMethodFromDetail !== 'card' ? paymentMethodFromDetail : paymentMethodFromWebhook;
       if (orderStatus === 'paid' || orderStatus === 'failed') {
         const result = parseCheckoutResult(detail);
         const expected = orderStatus === 'paid' ? 'success' : 'failed';
@@ -221,6 +227,7 @@ export async function processWebhookUseCase(env: Env, rawBody: string): Promise<
     status: orderStatus,
     rawPayload: auditPayload(payload, checkoutId),
     verifoneTransactionId: verifiedTransactionId,
+    paymentMethod,
   });
   return { status: 200, body: { status: outcome === 'applied' ? 'processed' : outcome } };
 }

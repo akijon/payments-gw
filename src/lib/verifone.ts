@@ -3,108 +3,146 @@
  */
 
 import type { Env } from '../types/env';
-import type { VerifoneCheckoutResponse, VerifoneCheckoutDetail } from '../types/api';
+import type {
+  PaymentMethod,
+  VerifoneCheckoutConfigurations,
+  VerifoneCheckoutDetail,
+  VerifoneCheckoutRequest,
+  VerifoneCheckoutResponse,
+} from '../types/api';
 import { withCircuitBreaker } from './circuit-breaker';
+import { getOAuth2ClientCredentialsToken } from './oauth';
 
 // ─── OAuth2 token management ─────────────────────────────────────
-
-interface CachedToken {
-  token: string;
-  expiresAt: number; // epoch ms
-}
 
 const TOKEN_KEY = 'verifone_oauth_token';
 const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
 const UPSTREAM_TIMEOUT_MS = 15_000;
 
+export interface BuildVerifoneCheckoutRequestParams {
+  orderNumber: string;
+  amount: number; // minor units
+  currency: string; // ISO 4217 uppercase, e.g. "ISK"
+  returnUrl: string;
+}
+
 function upstreamError(operation: string, response: Response): Error {
   return new Error(`${operation} failed with HTTP ${response.status}`);
 }
 
-export async function getVerifoneToken(env: Env): Promise<string> {
-  // 1. Check KV cache
-  const cached = await env.CACHE.get<CachedToken>(TOKEN_KEY, 'json');
-  if (cached && cached.expiresAt > Date.now() + TOKEN_BUFFER_MS) {
-    return cached.token;
+/** Non-empty after trim → usable contract ID; otherwise treat as unset. */
+function configuredContractId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Normalize Verifone payment_product value to PaymentMethod enum.
+ * Maps provider-specific values to standardized types for database storage.
+ */
+export function normalizePaymentMethod(paymentProduct?: string): PaymentMethod {
+  if (!paymentProduct) return 'unknown';
+
+  const product = paymentProduct.toUpperCase().trim();
+
+  switch (product) {
+    case 'PAYPAL':
+      return 'paypal';
+    case 'APPLEPAY':
+    case 'APPLE_PAY':
+      return 'apple_pay';
+    case 'GOOGLEPAY':
+    case 'GOOGLE_PAY':
+      return 'google_pay';
+    case 'VISA':
+    case 'MASTERCARD':
+    case 'AMEX':
+    case 'AMERICANEXPRESS':
+    case 'DISCOVER':
+    case 'JCB':
+    case 'DINERS':
+    case 'MAESTRO':
+      return 'card';
+    default:
+      // Never route an unrecognized provider product through card settlement.
+      return 'unknown';
+  }
+}
+
+/**
+ * Pure Verifone HPP checkout request builder.
+ *
+ * Card is always included from the existing PPC + 3DS contracts.
+ * Apple Pay and Google Pay are env-gated and fail-closed: omit the key unless
+ * a non-empty acquirer contract ID is provisioned. PayPal stays suppressed
+ * until both currency support and an operational settlement path exist.
+ */
+export function buildVerifoneCheckoutRequest(
+  env: Env,
+  params: BuildVerifoneCheckoutRequestParams,
+): VerifoneCheckoutRequest {
+  if (!Number.isSafeInteger(params.amount) || params.amount <= 0 || !/^[A-Z]{3}$/.test(params.currency)) {
+    throw new Error('Invalid checkout amount or currency');
   }
 
-  // 2. Request new token via client credentials grant
-  const resp = await withCircuitBreaker('verifone', () =>
-    fetch(env.VERIFONE_OAUTH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: env.VERIFONE_CLIENT_ID,
-        client_secret: env.VERIFONE_CLIENT_SECRET,
-        scope: env.VERIFONE_SCOPE,
-      }),
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    }),
-  );
-
-  if (!resp.ok) {
-    throw upstreamError('Verifone OAuth2', resp);
-  }
-
-  const data = (await resp.json()) as { access_token?: unknown; expires_in?: unknown };
-  if (
-    typeof data.access_token !== 'string' ||
-    data.access_token.length === 0 ||
-    typeof data.expires_in !== 'number' ||
-    !Number.isFinite(data.expires_in) ||
-    data.expires_in <= 30
-  ) {
-    throw new Error('Verifone OAuth2 returned an invalid token response');
-  }
-  const token: CachedToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
+  const configurations: VerifoneCheckoutConfigurations = {
+    card: {
+      mode: '3DS_PAYMENT',
+      payment_contract_id: env.VERIFONE_PAYMENT_CONTRACT_ID,
+      capture_now: true,
+      threed_secure: {
+        enabled: true,
+        threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
+      },
+    },
   };
 
-  // 3. Cache in KV with TTL
-  await env.CACHE.put(TOKEN_KEY, JSON.stringify(token), {
-    expirationTtl: Math.max(60, Math.floor(data.expires_in - TOKEN_BUFFER_MS / 1000)),
-  });
+  const applePayContractId = configuredContractId(env.VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID);
+  if (applePayContractId) {
+    configurations.apple_pay = { payment_contract_id: applePayContractId };
+  }
 
-  return token.token;
+  const googlePayContractId = configuredContractId(env.VERIFONE_GOOGLE_PAY_PAYMENT_CONTRACT_ID);
+  if (googlePayContractId) {
+    configurations.google_pay = { payment_contract_id: googlePayContractId };
+  }
+
+  return {
+    entity_id: env.VERIFONE_ENTITY_ID,
+    currency_code: params.currency,
+    amount: params.amount,
+    merchant_reference: params.orderNumber,
+    return_url: params.returnUrl,
+    interaction_type: 'HPP',
+    configurations,
+  };
+}
+
+export async function getVerifoneToken(env: Env): Promise<string> {
+  return getOAuth2ClientCredentialsToken({
+    cache: env.CACHE,
+    cacheKey: TOKEN_KEY,
+    breakerKey: 'verifone',
+    tokenUrl: env.VERIFONE_OAUTH_URL,
+    clientId: env.VERIFONE_CLIENT_ID,
+    clientSecret: env.VERIFONE_CLIENT_SECRET,
+    scope: env.VERIFONE_SCOPE,
+    operation: 'Verifone OAuth2',
+    bufferMs: TOKEN_BUFFER_MS,
+    timeoutMs: UPSTREAM_TIMEOUT_MS,
+  });
 }
 
 // ─── Create checkout session ────────────────────────────────────
 
 export async function createCheckout(
   env: Env,
-  params: {
-    orderNumber: string;
-    amount: number; // minor units
-    currency: string; // "ISK"
-    returnUrl: string;
-  },
+  params: BuildVerifoneCheckoutRequestParams,
 ): Promise<{ checkoutId: string; checkoutUrl: string }> {
-  if (!Number.isSafeInteger(params.amount) || params.amount <= 0 || !/^[A-Z]{3}$/.test(params.currency)) {
-    throw new Error('Invalid checkout amount or currency');
-  }
+  // Validation + configurations live in the pure builder so unit tests can
+  // pin HPP method gating without mocking fetch/OAuth.
+  const body = buildVerifoneCheckoutRequest(env, params);
   const token = await getVerifoneToken(env);
-
-  const body = {
-    entity_id: env.VERIFONE_ENTITY_ID,
-    currency_code: params.currency,
-    amount: params.amount,
-    merchant_reference: params.orderNumber,
-    return_url: params.returnUrl,
-    interaction_type: 'HPP' as const,
-    configurations: {
-      card: {
-        mode: '3DS_PAYMENT' as const,
-        payment_contract_id: env.VERIFONE_PAYMENT_CONTRACT_ID,
-        capture_now: true,
-        threed_secure: {
-          enabled: true,
-          threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
-        },
-      },
-    },
-  };
 
   const resp = await withCircuitBreaker('verifone', () =>
     fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {

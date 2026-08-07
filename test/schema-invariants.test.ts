@@ -43,4 +43,19 @@ describe('database payment invariants', () => {
     await insertOrder('order-a', 'checkout-unique');
     await expect(insertOrder('order-b', 'checkout-unique')).rejects.toThrow();
   });
+
+  it('requires a known payment method', async () => {
+    const statements = [
+      env.DB.prepare(
+        `INSERT INTO orders (id, order_number, status, currency, amount, items_json, payment_method)
+         VALUES ('null-method', 'NULL-METHOD', 'pending', 'ISK', 1000, '[]', NULL)`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO orders (id, order_number, status, currency, amount, items_json, payment_method)
+         VALUES ('invented-method', 'INVENTED-METHOD', 'pending', 'ISK', 1000, '[]', 'bank_transfer')`,
+      ),
+    ];
+
+    for (const statement of statements) await expect(statement.run()).rejects.toThrow();
+  });
 });

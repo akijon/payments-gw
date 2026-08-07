@@ -30,6 +30,11 @@ export interface Env {
   VERIFONE_PAYMENT_CONTRACT_ID: string;
   VERIFONE_3DS_CONTRACT_ID: string;
   VERIFONE_JWKS_URL: string;
+  // Optional wallet HPP contracts — unset/blank = method omitted (fail-closed).
+  // Do not enable in production until Task 0 method matrix is signed off.
+  VERIFONE_PAYPAL_PAYMENT_CONTRACT_ID?: string;
+  VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID?: string;
+  VERIFONE_GOOGLE_PAY_PAYMENT_CONTRACT_ID?: string;
 
   // ─── Landsbankinn secrets (wrangler secret put) ──────────
   LANDSBANKINN_CLIENT_ID: string;

@@ -137,6 +137,28 @@ export async function reconcile(
           continue;
         }
 
+        // Exclude PayPal and unknown payment methods from Landsbankinn reconciliation.
+        // Apple Pay and Google Pay are acquirer-backed card payments and reconcile here.
+        const paymentMethod = order.payment_method ?? 'unknown';
+        if (paymentMethod === 'paypal' || paymentMethod === 'unknown') {
+          await recordReconciliationException(env.DB, {
+            runId,
+            settlementId: settlement.id,
+            transactionId: transaction.id,
+            reason: 'non_card_payment_method',
+            details: {
+              payment_method: paymentMethod,
+              order_id: order.id,
+            },
+          });
+          console.log('Excluding non-acquirer payment from Landsbankinn reconciliation', {
+            orderId: order.id,
+            paymentMethod,
+            transactionId: transaction.id,
+          });
+          continue;
+        }
+
         // The reconciliation window deliberately overlaps the prior run, so the same
         // settled transaction can legitimately arrive again. Recognize it as an
         // idempotent replay instead of a payment_integrity_mismatch, which would

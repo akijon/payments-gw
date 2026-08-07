@@ -65,6 +65,7 @@ src/
 ├── lib/
 │   ├── verifone.ts          # OAuth2 JWT, checkout create/read, payment parsing
 │   ├── landsbankinn.ts      # OAuth2, settlements, transactions (read-only reconciliation)
+│   ├── oauth.ts             # Shared OAuth2 client-credentials token fetch/cache (Verifone + Landsbankinn)
 │   ├── catalog.ts           # Authoritative product catalog + secure cart resolution
 │   ├── db.ts                # D1 query helpers, UUID/order number generation
 │   ├── jwks.ts              # JWKS fetch + KV cache for webhook verification
@@ -76,8 +77,14 @@ src/
     └── api.ts               # Shared domain types (Order, Verifone, Landsbankinn)
 
 migrations/
-├── 0001_init.sql            # D1 schema: orders, payment_events, processed_webhooks, settlements
-└── 0002_products.sql        # Product catalog + seed prices (authoritative)
+├── 0001_init.sql                    # D1 schema: orders, payment_events, processed_webhooks, settlements
+├── 0002_products.sql                # Product catalog + seed prices (authoritative)
+├── 0003_order_access_tokens.sql     # Hashed order-status capability tokens
+├── 0004_checkout_idempotency.sql    # checkout_attempts table for Idempotency-Key handling
+├── 0005_order_invariants.sql        # Unique provider-identifier and monetary invariants
+├── 0006_reconciliation_runs.sql     # Durable reconciliation cursor and run history
+├── 0007_order_number_index.sql      # Index order_number for reconciliation cron lookups
+└── 0008_payment_method.sql          # payment_method column for PayPal/wallet settlement isolation
 
 test/
 ├── apply-migrations.ts      # Inlined D1 schema for Workers runtime (avoids node:fs issue)
