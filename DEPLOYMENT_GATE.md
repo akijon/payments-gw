@@ -19,9 +19,9 @@ This document supersedes readiness claims in older checklist/status documents. A
 - [ ] Create isolated production D1, KV, and Rate Limiting resources and create ignored `wrangler.production.toml` from the example.
 - [ ] Supply a least-privilege Cloudflare API token with Worker deploy, secret-list, D1, KV, and rate-limit permissions for only this account/project.
 - [ ] Configure all required production secrets; do not store their values in Git, logs, or this document.
-- [ ] Apply and verify migrations `0001`–`0008` with `wrangler d1 migrations apply` after a tested backup/rollback plan.
+- [ ] Apply and verify migrations `0001`–`0008` with `wrangler d1 migrations apply` after a tested backup/rollback plan. `0007_order_number_index.sql` backs the reconciliation cron's `order_number` lookup; skipping it degrades reconciliation, it does not fail loudly. `0008_payment_method.sql` adds wallet payment-method tracking used by the Apple Pay/Google Pay reconciliation split.
 - [ ] Replace the live storefront's `/api/teya/checkout` contract and Teya branding with the documented Verifone contract; verify product identifiers and prices come from the same canonical catalog.
-- [ ] Configure `PUBLIC_API_URL` and route its `/api/return` path to this Worker; the current `https://irja.khalipa.net/api/return` responds with 404.
+- [ ] Verify the **production** `PUBLIC_API_URL` origin reaches this Worker: `scripts/verify-return-routing.sh <origin>`. Verifone returns land on that origin, so it must forward `/api/return` to this Worker or the customer is stranded after paying. The sandbox origin is verified — `GET https://irja.khalipa.net/api/return` returned `400 {"code":"validation"}` from `src/routes/return.ts` on 2026-08-02, via the storefront's `PAYMENTS_GW` service-binding proxy. The earlier `404` in this document predated that proxy. The production origin is still unset (`REPLACE_ME_PUBLIC_RETURN_ORIGIN`) and unverified.
 - [ ] Configure and verify Cloudflare dashboard WAF/rate-limit rules from `docs/edge-security.md`.
 - [ ] Replace development catalog fixture data with approved merchant catalog data.
 - [ ] Complete every redacted scenario in `SANDBOX_E2E_GATE.md` using vendor sandbox systems and a vendor-signed webhook.

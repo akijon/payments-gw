@@ -58,7 +58,30 @@ describe('POST /api/checkout', () => {
 
     const { createCheckout } = await import('../src/lib/verifone');
     const request = vi.mocked(createCheckout).mock.calls[0]?.[1];
+    // No PUBLIC_API_URL in wrangler.test.toml: the request origin is the callback origin.
     expect(request?.returnUrl).toMatch(/^https:\/\/test\.example\.com\/api\/return\?order_id=[0-9a-f-]+$/);
+  });
+
+  it('builds return_url from PUBLIC_API_URL when the Worker is reached through another origin', async () => {
+    // Sandbox/production put the Worker behind the storefront origin (a /api/*
+    // service-binding proxy), so the provider must return to that public origin
+    // and not to the origin that happens to serve this request.
+    env.PUBLIC_API_URL = 'https://public.example.net';
+    try {
+      const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+      });
+      expect(resp.status).toBe(200);
+      const data = (await resp.json()) as { order_id: string };
+
+      const { createCheckout } = await import('../src/lib/verifone');
+      const request = vi.mocked(createCheckout).mock.calls[0]?.[1];
+      expect(request?.returnUrl).toBe(`https://public.example.net/api/return?order_id=${data.order_id}`);
+    } finally {
+      delete env.PUBLIC_API_URL;
+    }
   });
 
   it('returns 400 for empty items', async () => {

@@ -11,7 +11,10 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "production"
 STOREFRONT_URL = "https://irja.is"
-PUBLIC_API_URL = "REPLACE_ME_PUBLIC_WORKER_ORIGIN"
+# Origin Verifone returns the browser to. Use the storefront origin when it
+# proxies /api/* to this Worker (the sandbox setup); otherwise the Worker's own
+# public origin. Whichever is chosen, GET <origin>/api/return must reach here.
+PUBLIC_API_URL = "REPLACE_ME_PUBLIC_RETURN_ORIGIN"
 VERIFONE_API_BASE = "https://emea.gsc.verifone.cloud/oidc/checkout-service"
 VERIFONE_OAUTH_URL = "https://emea.vam.verifone.cloud/oauth2/realms/root/realms/VerifoneServices/access_token"
 LANDSBANKINN_API_BASE = "https://api.landsbankinn.is/api/Acquiring/Acquiring/v1"
