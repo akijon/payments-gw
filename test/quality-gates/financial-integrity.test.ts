@@ -29,6 +29,7 @@ describe('Financial Integrity Validation', () => {
 
     it('handles edge cases in monetary arithmetic', () => {
       // Zero amounts
+      // oxlint-disable-next-line oxc/erasing-op -- intentionally verifying the zero-amount case
       expect(0 * 5).toBe(0);
 
       // Single aurar (smallest unit)
