@@ -35,3 +35,6 @@ coverage/
 
 # Hermes plans (local only)
 .hermes/
+
+# Claude local settings (personal)
+.claude/settings.local.json

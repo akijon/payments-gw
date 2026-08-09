@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "typescript/consistent-type-imports": "error",
+    "no-console": "off"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": ["dist/**", "coverage/**", ".wrangler/**", "worker-configuration.d.ts"],
+  "overrides": [
+    {
+      "files": ["scripts/**/*.js"],
+      "env": {
+        "commonjs": true
+      },
+      "globals": {
+        "console": "readonly",
+        "module": "readonly",
+        "process": "readonly",
+        "require": "readonly"
+      }
+    }
+  ]
+}

@@ -20,7 +20,7 @@
     "db:query:prod": "wrangler d1 execute irja-payments --remote --command",
     "secrets:setup": "./scripts/setup-secrets.sh",
     "typecheck": "./scripts/with-agent-safe-env.sh tsc --noEmit",
-    "lint": "./scripts/with-agent-safe-env.sh eslint src test scripts vitest.config.mts",
+    "lint": "./scripts/with-agent-safe-env.sh oxlint src test scripts vitest.config.mts",
     "format": "npm run format:write",
     "format:write": "prettier --write 'src/**/*.ts' 'test/**/*.ts' 'scripts/**/*.js' '.github/**/*.{yml,yaml}' 'docs/**/*.md' '*.{json,md,mjs,mts}'",
     "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts' 'scripts/**/*.js' '.github/**/*.{yml,yaml}' 'docs/**/*.md' '*.{json,md,mjs,mts}'",
@@ -28,13 +28,11 @@
     "test:security-regression": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/security-regression.test.ts",
     "test:financial-integrity": "./scripts/with-agent-safe-env.sh vitest run test/quality-gates/financial-integrity.test.ts",
     "quality:dashboard": "node scripts/quality-dashboard.js",
-    "quality:check": "node scripts/quality-dashboard.js",
-    "prepare": "husky"
+    "quality:check": "node scripts/quality-dashboard.js"
   },
   "lint-staged": {
     "*.{ts,mts,mjs,js}": [
-      "prettier --write",
-      "eslint --fix"
+      "oxlint --fix"
     ],
     "*.{json,yml,yaml,md}": [
       "prettier --write"
@@ -46,14 +44,13 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.20.3",
     "@cloudflare/workers-types": "^5.20260728.1",
-    "@eslint/js": "^10.0.1",
+    "@oxlint/binding-linux-x64-gnu": "^1.77.0",
     "@vitest/coverage-istanbul": "^4.1.10",
-    "eslint": "^10.8.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.1.6",
+    "oxlint": "^1.77.0",
     "prettier": "^3.9.6",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10",
     "wrangler": "^4.114.0"
   }
