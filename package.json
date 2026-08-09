@@ -33,13 +33,11 @@
   "lint-staged": {
     "*.{ts,mts,mjs,js}": [
       "oxlint --fix"
-    ],
-    "*.{json,yml,yaml,md}": [
-      "prettier --write"
     ]
   },
   "dependencies": {
-    "hono": "^4.13.1"
+    "hono": "^4.13.1",
+    "lint-staged": "^17.3.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.20.3",
