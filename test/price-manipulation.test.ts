@@ -7,6 +7,7 @@ vi.mock('../src/lib/verifone', () => ({
     checkoutId: 'test-checkout-id',
     checkoutUrl: 'https://test.verifone.com/checkout/test-checkout-id',
   }),
+  createCustomer: vi.fn().mockResolvedValue('cust-mock-1'),
   getCheckout: vi.fn(),
   parseCheckoutResult: vi.fn(),
 }));

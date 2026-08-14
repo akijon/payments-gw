@@ -26,6 +26,7 @@ This document supersedes readiness claims in older checklist/status documents. A
 - [ ] Replace development catalog fixture data with approved merchant catalog data.
 - [ ] Complete every redacted scenario in `SANDBOX_E2E_GATE.md` using vendor sandbox systems and a vendor-signed webhook.
 - [ ] Confirm Verifone and Landsbankinn monetary-unit conventions for ISK in the contracted APIs before accepting live money.
+- [ ] Provision the real 3DS contract through Verifone — only a Verifone representative can create one (Verifone Central → Administration → 3DS Contracts), not Landsbankinn directly. Landsbankinn is why one is required at all: it acquires in the EEA, where PSD2 SCA applies. Set `VERIFONE_3DS_CONTRACT_ID` for sandbox **and** production once issued; both are placeholders today. `buildVerifoneCheckoutRequest`/`createCheckout` do not themselves validate the contract ID is real, so an unconfigured or placeholder value fails at Verifone, not locally — confirm the value is set before blaming Verifone for a dead checkout.
 
 ## Approved commands
 

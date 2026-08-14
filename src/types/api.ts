@@ -58,13 +58,32 @@ export interface VerifoneWalletConfiguration {
   payment_contract_id: string;
 }
 
+// EMV 3DS2 threeDSRequestorAuthenticationInd values (Checkout API 3D-Secure fields).
+export type ThreeDSAuthenticationIndicator = '01' | '02' | '03' | '04' | '05' | '06';
+
+// EMV 3DS2 threeDSRequestorChallengeInd values, including the '90' CB-specific value.
+export type ThreeDSChallengeIndicator = '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '90';
+
+export interface VerifoneBilling {
+  first_name?: string;
+  last_name?: string;
+  address_1?: string;
+  city?: string;
+  country_code?: string;
+  postal_code?: string;
+  state?: string;
+}
+
 export interface VerifoneCardConfiguration {
   mode: 'PAYMENT' | '3DS_PAYMENT' | '3DS' | 'CARD_CAPTURE';
   payment_contract_id: string;
   capture_now: boolean;
+  dynamic_descriptor?: string;
   threed_secure?: {
     enabled: boolean;
     threeds_contract_id: string;
+    authentication_indicator?: ThreeDSAuthenticationIndicator;
+    challenge_indicator?: ThreeDSChallengeIndicator;
   };
 }
 
@@ -86,6 +105,7 @@ export interface VerifoneCheckoutRequest {
   merchant_reference: string;
   return_url: string;
   interaction_type: 'HPP' | 'IFRAME' | 'PAYMENT_LINK';
+  customer?: string;
   configurations: VerifoneCheckoutConfigurations;
 }
 

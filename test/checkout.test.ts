@@ -14,6 +14,7 @@ vi.mock('../src/lib/verifone', () => ({
     checkoutId: 'chk-test-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-1',
   }),
+  createCustomer: vi.fn().mockResolvedValue('cust-mock-1'),
   getCheckout: vi.fn(),
   parseCheckoutResult: vi.fn(),
 }));
@@ -346,5 +347,56 @@ describe('POST /api/checkout', () => {
 
     const orders = await env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first<{ count: number }>();
     expect(orders?.count).toBe(2); // original order left orphaned at 'checkout_created', new one created
+  });
+
+  it('creates a Verifone customer when an email is given, and passes it to createCheckout', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        customer_email: 'buyer@example.com',
+        customer_name: 'Jón Jónsson',
+      }),
+    });
+
+    expect(resp.status).toBe(200);
+    const { createCustomer, createCheckout } = await import('../src/lib/verifone');
+    expect(vi.mocked(createCustomer)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ email: 'buyer@example.com', firstName: 'Jón', lastName: 'Jónsson' }),
+    );
+    const checkoutCall = vi.mocked(createCheckout).mock.calls[0]?.[1];
+    expect(checkoutCall?.customer).toBe('cust-mock-1');
+  });
+
+  it('does not create a Verifone customer with no email', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+    });
+
+    expect(resp.status).toBe(200);
+    const { createCustomer } = await import('../src/lib/verifone');
+    expect(vi.mocked(createCustomer)).not.toHaveBeenCalled();
+  });
+
+  it('still completes checkout when Verifone customer creation fails (best effort only)', async () => {
+    const { createCustomer, createCheckout } = await import('../src/lib/verifone');
+    vi.mocked(createCustomer).mockRejectedValueOnce(new Error('customer-service down'));
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        customer_email: 'buyer@example.com',
+      }),
+    });
+
+    expect(resp.status).toBe(200);
+    const checkoutCall = vi.mocked(createCheckout).mock.calls[0]?.[1];
+    expect(checkoutCall?.customer).toBeUndefined();
   });
 });

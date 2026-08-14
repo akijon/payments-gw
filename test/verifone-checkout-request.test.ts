@@ -181,4 +181,36 @@ describe('buildVerifoneCheckoutRequest', () => {
     // Contract IDs come from Env, never from params.
     expect(body.configurations.card.payment_contract_id).toBe('card-ppc-1');
   });
+
+  it('omits dynamic_descriptor, 3DS indicators, and customer by default (unchanged behavior)', () => {
+    const body = buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS });
+
+    expect(body.configurations.card).toEqual(CARD_ONLY_CONFIG.card);
+    expect(body.customer).toBeUndefined();
+  });
+
+  it('passes through dynamic_descriptor, 3DS authentication/challenge indicators, and customer when provided', () => {
+    const body = buildVerifoneCheckoutRequest(testEnv(), {
+      ...BASE_PARAMS,
+      customer: 'cust-1',
+      dynamicDescriptor: 'IRJA STORE',
+      authenticationIndicator: '01',
+      challengeIndicator: '04',
+    });
+
+    expect(body.customer).toBe('cust-1');
+    expect(body.configurations.card.dynamic_descriptor).toBe('IRJA STORE');
+    expect(body.configurations.card.threed_secure).toEqual({
+      enabled: true,
+      threeds_contract_id: '3ds-contract-1',
+      authentication_indicator: '01',
+      challenge_indicator: '04',
+    });
+  });
+
+  it('rejects a dynamic_descriptor longer than 25 characters', () => {
+    expect(() =>
+      buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, dynamicDescriptor: 'x'.repeat(26) }),
+    ).toThrow(/25-character limit/);
+  });
 });

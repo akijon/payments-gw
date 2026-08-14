@@ -117,6 +117,7 @@ export async function processReturnUseCase(env: Env, input: ProcessReturnInput):
           checkout_id: detail.id,
           amount: detail.amount,
           currency: detail.currency_code,
+          failure_reason: result.failureReason,
         }),
       });
       if (applied) return { found: true, status: 'failed' };
