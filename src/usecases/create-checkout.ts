@@ -143,10 +143,42 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     throw error;
   }
 
-  const { createCheckout } = await import('../lib/verifone');
   // The provider must return to the gateway, not directly to the storefront.
   const returnUrl = new URL('/api/return', input.publicApiOrigin);
   returnUrl.searchParams.set('order_id', orderId);
+
+  const { createCheckout, createCustomer } = await import('../lib/verifone');
+
+  // Fire customer creation without blocking checkout. If it resolves before
+  // checkout finishes, reuse its ID; otherwise discard it (best-effort only).
+  // The separate circuit breaker (verifone-customer vs verifone) ensures slow
+  // customer API doesn't trip the payment circuit.
+  let verifoneCustomerId: string | undefined;
+  // Fire customer creation async without awaiting. Fire-and-forget pattern:
+  // checkout takes priority and proceeds immediately, customer ID (if needed)
+  // is populated via side-effect if the promise settles before checkout finishes.
+  // eslint-disable-next-line no-unused-expressions
+  input.customerEmail
+    ? createCustomer(env, {
+        email: input.customerEmail,
+        ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
+        ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
+      })
+        .then((id) => {
+          verifoneCustomerId = id;
+        })
+        .catch((error) => {
+          console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
+          logPaymentEvent(env.DB, {
+            id: generateUUID(),
+            orderId,
+            eventType: 'customer_creation_failed',
+            source: 'verifone_api',
+            rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
+            verified: false,
+          }).catch(() => {}); // best-effort audit logging
+        })
+    : Promise.resolve();
 
   let checkoutResult: { checkoutId: string; checkoutUrl: string };
   try {
@@ -155,6 +187,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       amount: totalAmount,
       currency,
       returnUrl: returnUrl.toString(),
+      ...(verifoneCustomerId ? { customer: verifoneCustomerId } : {}),
     });
   } catch (error) {
     console.error(JSON.stringify({ message: 'Verifone checkout creation failed', order_id: orderId }));

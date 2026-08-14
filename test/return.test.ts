@@ -224,6 +224,45 @@ describe('GET /api/return', () => {
     expect(order!.status).toBe('failed');
   });
 
+  it('records the SCA/3DS failure reason from parseCheckoutResult in the payment_events audit log', async () => {
+    const orderId = await seedOrder();
+
+    const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: 'chk-return-1',
+      status: 'FAILED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-TEST',
+      transaction_id: 'txn-fail-3ds',
+      events: [
+        {
+          type: 'TRANSACTION_FAILED',
+          id: 'txn-fail-3ds',
+          timestamp: '2026-07-25T10:00:00Z',
+          details: { reason_code: '1815' },
+        },
+      ],
+    });
+    vi.mocked(parseCheckoutResult).mockReturnValueOnce({
+      status: 'failed',
+      transactionId: 'txn-fail-3ds',
+      failureReason: 'authentication_required',
+    });
+
+    await SELF.fetch(
+      `https://test.example.com/api/return?order_id=${orderId}&transaction_id=txn-fail-3ds&checkout_id=chk-return-1`,
+      { redirect: 'manual' },
+    );
+
+    const event = await env.DB.prepare(
+      "SELECT raw_payload FROM payment_events WHERE order_id = ? AND event_type = 'transaction_failed'",
+    )
+      .bind(orderId)
+      .first<{ raw_payload: string }>();
+    expect(JSON.parse(event!.raw_payload)).toMatchObject({ failure_reason: 'authentication_required' });
+  });
+
   it('recovers an order from failed to paid on a verified late-arriving success', async () => {
     const orderId = await seedOrder();
     await env.DB.prepare(

@@ -5,6 +5,9 @@
 import type { Env } from '../types/env';
 import type {
   PaymentMethod,
+  ThreeDSAuthenticationIndicator,
+  ThreeDSChallengeIndicator,
+  VerifoneBilling,
   VerifoneCheckoutConfigurations,
   VerifoneCheckoutDetail,
   VerifoneCheckoutRequest,
@@ -18,12 +21,19 @@ import { getOAuth2ClientCredentialsToken } from './oauth';
 const TOKEN_KEY = 'verifone_oauth_token';
 const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
 const UPSTREAM_TIMEOUT_MS = 15_000;
+const MAX_DYNAMIC_DESCRIPTOR_LENGTH = 25;
 
 export interface BuildVerifoneCheckoutRequestParams {
   orderNumber: string;
   amount: number; // minor units
   currency: string; // ISO 4217 uppercase, e.g. "ISK"
   returnUrl: string;
+  /** Pre-created Verifone customer ID (see createCustomer) to attach for richer 3DS customer_details. */
+  customer?: string;
+  /** Short text shown on the cardholder's bank statement. Verifone caps this at 25 chars. */
+  dynamicDescriptor?: string;
+  authenticationIndicator?: ThreeDSAuthenticationIndicator;
+  challengeIndicator?: ThreeDSChallengeIndicator;
 }
 
 function upstreamError(operation: string, response: Response): Error {
@@ -84,6 +94,9 @@ export function buildVerifoneCheckoutRequest(
   if (!Number.isSafeInteger(params.amount) || params.amount <= 0 || !/^[A-Z]{3}$/.test(params.currency)) {
     throw new Error('Invalid checkout amount or currency');
   }
+  if (params.dynamicDescriptor && params.dynamicDescriptor.length > MAX_DYNAMIC_DESCRIPTOR_LENGTH) {
+    throw new Error(`dynamicDescriptor exceeds Verifone's ${MAX_DYNAMIC_DESCRIPTOR_LENGTH}-character limit`);
+  }
 
   const configurations: VerifoneCheckoutConfigurations = {
     card: {
@@ -93,9 +106,15 @@ export function buildVerifoneCheckoutRequest(
       threed_secure: {
         enabled: true,
         threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
+        ...(params.authenticationIndicator ? { authentication_indicator: params.authenticationIndicator } : {}),
+        ...(params.challengeIndicator ? { challenge_indicator: params.challengeIndicator } : {}),
       },
     },
   };
+
+  if (params.dynamicDescriptor) {
+    configurations.card.dynamic_descriptor = params.dynamicDescriptor;
+  }
 
   const applePayContractId = configuredContractId(env.VERIFONE_APPLE_PAY_PAYMENT_CONTRACT_ID);
   if (applePayContractId) {
@@ -114,6 +133,7 @@ export function buildVerifoneCheckoutRequest(
     merchant_reference: params.orderNumber,
     return_url: params.returnUrl,
     interaction_type: 'HPP',
+    ...(params.customer ? { customer: params.customer } : {}),
     configurations,
   };
 }
@@ -180,6 +200,67 @@ export async function createCheckout(
   return { checkoutId: data.id, checkoutUrl: data.url };
 }
 
+// ─── Create customer (Customer API) ─────────────────────────────
+
+export interface CreateCustomerParams {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  billingAddress1?: string;
+  billingCity?: string;
+  billingCountryCode?: string;
+  billingPostalCode?: string;
+  billingState?: string;
+}
+
+export async function createCustomer(env: Env, params: CreateCustomerParams): Promise<string> {
+  if (!params.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email)) {
+    throw new Error('Invalid customer email');
+  }
+  const token = await getVerifoneToken(env);
+
+  // Verifone's Customer API schema has no top-level first_name/last_name or
+  // email fields — those live at email_address and billing.first_name/last_name.
+  const billing: VerifoneBilling = {
+    ...(params.firstName ? { first_name: params.firstName } : {}),
+    ...(params.lastName ? { last_name: params.lastName } : {}),
+    ...(params.billingAddress1 ? { address_1: params.billingAddress1 } : {}),
+    ...(params.billingCity ? { city: params.billingCity } : {}),
+    ...(params.billingCountryCode ? { country_code: params.billingCountryCode } : {}),
+    ...(params.billingPostalCode ? { postal_code: params.billingPostalCode } : {}),
+    ...(params.billingState ? { state: params.billingState } : {}),
+  };
+
+  const body = {
+    entity_id: env.VERIFONE_ENTITY_ID,
+    email_address: params.email,
+    ...(Object.keys(billing).length > 0 ? { billing } : {}),
+  };
+
+  const resp = await withCircuitBreaker('verifone-customer', () =>
+    fetch(`${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: '*/*',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }),
+  );
+
+  if (!resp.ok) {
+    throw upstreamError('Verifone createCustomer', resp);
+  }
+
+  const data = (await resp.json()) as { id?: unknown };
+  if (typeof data.id !== 'string' || data.id.length === 0) {
+    throw new Error('Verifone createCustomer returned an invalid response');
+  }
+  return data.id;
+}
+
 // ─── Read checkout (verify payment) ─────────────────────────────
 
 export async function getCheckout(env: Env, checkoutId: string): Promise<VerifoneCheckoutDetail> {
@@ -208,9 +289,19 @@ export async function getCheckout(env: Env, checkoutId: string): Promise<Verifon
 
 // ─── Extract payment status from checkout ────────────────────────
 
+// Reason codes for API transactions (Verifone docs) that specifically indicate
+// an SCA/3DS authentication step, as opposed to a plain card decline:
+// 1813 SCA - PIN required · 1815 Additional customer authentication required
+// (CDCVM/Passcode/Biometric) · 1816 Acquirer requested SCA action not supported
+// · 1824 Invalid use of SCA Exemption Indicators · 1836 SCA Exemption Soft
+// Decline (Transaction Risk Analysis service not available).
+const SCA_REASON_CODES = new Set(['1813', '1815', '1816', '1824', '1836']);
+
 export interface CheckoutPaymentResult {
   status: 'success' | 'failed' | 'pending';
   transactionId?: string;
+  /** Only set when status is 'failed'. Distinguishes an SCA/3DS authentication failure from a plain decline. */
+  failureReason?: 'authentication_required' | 'declined';
 }
 
 export function parseCheckoutResult(detail: VerifoneCheckoutDetail): CheckoutPaymentResult {
@@ -222,7 +313,10 @@ export function parseCheckoutResult(detail: VerifoneCheckoutDetail): CheckoutPay
     return { status: 'success', transactionId: successEvent.id };
   }
   if (failedEvent) {
-    return { status: 'failed', transactionId: failedEvent.id };
+    const reasonCode = failedEvent.details?.reason_code;
+    const failureReason: CheckoutPaymentResult['failureReason'] =
+      typeof reasonCode === 'string' && SCA_REASON_CODES.has(reasonCode) ? 'authentication_required' : 'declined';
+    return { status: 'failed', transactionId: failedEvent.id, failureReason };
   }
   return { status: 'pending' };
 }

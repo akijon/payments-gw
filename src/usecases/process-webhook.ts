@@ -53,7 +53,11 @@ function validPayload(value: unknown): value is VerifoneWebhookPayload {
   );
 }
 
-function auditPayload(payload: VerifoneWebhookPayload, checkoutId: string): string {
+function auditPayload(
+  payload: VerifoneWebhookPayload,
+  checkoutId: string,
+  failureReason?: 'authentication_required' | 'declined',
+): string {
   return JSON.stringify({
     event_id: payload.eventId,
     event_type: payload.eventType,
@@ -62,6 +66,7 @@ function auditPayload(payload: VerifoneWebhookPayload, checkoutId: string): stri
     transaction_id: payload.content?.id,
     transaction_type: payload.content?.transaction_type,
     transaction_status: payload.content?.transaction_status,
+    ...(failureReason ? { failure_reason: failureReason } : {}),
   });
 }
 
@@ -123,6 +128,7 @@ export async function processWebhookUseCase(env: Env, rawBody: string): Promise<
 
   let verifiedTransactionId: string | undefined;
   let paymentMethod: PaymentMethod | undefined;
+  let failureReasonFromCheckout: 'authentication_required' | 'declined' | undefined;
   if (orderStatus === 'paid' || orderStatus === 'refunded' || orderStatus === 'failed') {
     try {
       const { getCheckout, parseCheckoutResult, normalizePaymentMethod } = await import('../lib/verifone');
@@ -153,6 +159,9 @@ export async function processWebhookUseCase(env: Env, rawBody: string): Promise<
         }
         if (orderStatus === 'paid') {
           verifiedTransactionId = detail.transaction_id;
+        } else {
+          // Capture SCA/3DS failure classification from parseCheckoutResult.
+          failureReasonFromCheckout = result.failureReason;
         }
       } else {
         const refund = payload.content;
@@ -225,7 +234,7 @@ export async function processWebhookUseCase(env: Env, rawBody: string): Promise<
     eventType: payload.eventType,
     orderId: order.id,
     status: orderStatus,
-    rawPayload: auditPayload(payload, checkoutId),
+    rawPayload: auditPayload(payload, checkoutId, failureReasonFromCheckout),
     verifoneTransactionId: verifiedTransactionId,
     paymentMethod,
   });
