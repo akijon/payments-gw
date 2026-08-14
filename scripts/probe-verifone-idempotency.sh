@@ -11,7 +11,7 @@
 # Usage:
 #   set -a; source .dev.vars; set +a
 #   VERIFONE_API_BASE=... VERIFONE_OAUTH_URL=... scripts/probe-verifone-idempotency.sh
-#   scripts/probe-verifone-idempotency.sh --replay <uuid>   # question 4, later
+#   scripts/probe-verifone-idempotency.sh --replay   # Q4, reads state from prior run
 set -euo pipefail
 
 if [[ -n "${IRJA_AGENT_SAFE_ENV:-}" ]]; then
@@ -39,6 +39,7 @@ command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 AMOUNT_A=${IRJA_PROBE_AMOUNT:-100}
 AMOUNT_B=$((AMOUNT_A * 9))
 RETURN_URL=${IRJA_PROBE_RETURN_URL:-https://example.invalid/api/return}
+STATE_FILE=${IRJA_PROBE_STATE:-/tmp/vfi-probe-state.json}
 
 token() {
   curl -sS -X POST "$VERIFONE_OAUTH_URL" \
@@ -70,7 +71,7 @@ post() {
   local key=$1 payload=$2 args=()
   args=(-sS -o /tmp/vfi-probe-resp.json -w '%{http_code}'
         -X POST "$VERIFONE_API_BASE/v2/checkout"
-        -H "Authorization: Bearer $TOKEN"
+        -H "Authorization: Bearer ***"
         -H 'Content-Type: application/json'
         -H 'Accept: */*')
   [[ -n "$key" ]] && args+=(-H "x-vfi-api-idempotencykey: $key")
@@ -81,12 +82,28 @@ post() {
 
 TOKEN=$(token)
 
+# --replay: read state from a prior run, replay the EXACT original body, and
+# compare against the original checkout ID.  This isolates key retention from
+# payload mismatch: if Verifone scopes the key to the request body, a different
+# body would produce a false "forgotten" result regardless of actual retention.
 if [[ "${1:-}" == "--replay" ]]; then
-  KEY=${2:?usage: $0 --replay <uuid>}
-  echo "Q4 retention replay with key $KEY"
-  read -r status id <<<"$(post "$KEY" "$(body "$AMOUNT_A" "IDEM-PROBE-Q4")")"
+  if [[ ! -f "$STATE_FILE" ]]; then
+    echo "No state file at $STATE_FILE. Run the probe first without --replay." >&2
+    exit 2
+  fi
+  KEY=$(jq -r .key "$STATE_FILE")
+  ORIG_BODY=$(jq -r .body "$STATE_FILE")
+  ORIG_ID=$(jq -r .checkout_id "$STATE_FILE")
+  echo "Q4 retention replay with key $KEY (replaying exact original payload)"
+  read -r status id <<<"$(post "$KEY" "$ORIG_BODY")"
   echo "  status=$status checkout_id=$id"
-  echo "  A new id here means the key was already forgotten; the same id means it is still retained."
+  if [[ "$id" == "$ORIG_ID" && "$id" != "-" ]]; then
+    echo "  -> RETAINED: key still active, returned the original checkout."
+  elif [[ "$id" == "-" ]]; then
+    echo "  -> INCONCLUSIVE: no checkout ID in response."
+  else
+    echo "  -> FORGOTTEN: key expired, created a new checkout."
+  fi
   exit 0
 fi
 
@@ -96,16 +113,21 @@ read -r s2 id2 <<<"$(post "" "$(body "$AMOUNT_A" "IDEM-PROBE-BASE")")"
 echo "  1: status=$s1 id=$id1"
 echo "  2: status=$s2 id=$id2"
 if [[ "$id1" == "$id2" && "$id1" != "-" ]]; then
-  echo "  -> merchant_reference already deduplicates. Idempotency header question is moot."
+  echo "  -> merchant_reference already deduplicates."
+  echo "  -> ABORTING as INCONCLUSIVE: cannot isolate the header's effect when"
+  echo "     merchant_reference alone produces identical checkout IDs."
+  echo "     The idempotency-key question is moot for this tenant."
+  exit 0
 else
   echo "  -> distinct checkouts, as expected: no implicit dedupe on merchant_reference."
 fi
 
 KEY=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
+BODY_Q12=$(body "$AMOUNT_A" "IDEM-PROBE-Q12")
 echo
 echo "== Q1/Q2: same key, identical body (key=$KEY) =="
-read -r s3 id3 <<<"$(post "$KEY" "$(body "$AMOUNT_A" "IDEM-PROBE-Q12")")"
-read -r s4 id4 <<<"$(post "$KEY" "$(body "$AMOUNT_A" "IDEM-PROBE-Q12")")"
+read -r s3 id3 <<<"$(post "$KEY" "$BODY_Q12")"
+read -r s4 id4 <<<"$(post "$KEY" "$BODY_Q12")"
 echo "  1: status=$s3 id=$id3"
 echo "  2: status=$s4 id=$id4"
 if [[ "$id3" == "$id4" && "$id3" != "-" ]]; then
@@ -114,6 +136,13 @@ else
   echo "  -> IGNORED: replay created a second checkout. A 2xx here proves nothing;"
   echo "     unknown headers are silently dropped. Retrying checkout creation is UNSAFE."
 fi
+
+# Persist state for --replay so the exact body and original checkout ID are
+# retained.  Without this, a later replay cannot distinguish key expiry from
+# payload mismatch.
+jq -nc --arg key "$KEY" --arg body "$BODY_Q12" --arg id "$id3" \
+  '{key:$key, body:$body, checkout_id:$id, merchant_reference:"IDEM-PROBE-Q12"}' > "$STATE_FILE"
+echo "  State saved to $STATE_FILE"
 
 echo
 echo "== Q3: same key, DIFFERENT body (amount $AMOUNT_A -> $AMOUNT_B) =="
@@ -129,7 +158,8 @@ fi
 
 echo
 echo "== Q4: retention =="
-echo "  Re-run later to bound the window:  $0 --replay $KEY"
+echo "  Re-run later to bound the window:  $0 --replay"
+echo "  (reads state from $STATE_FILE — exact original payload + checkout ID)"
 echo "  A bound is not a policy — get the retention window from Verifone in writing."
 echo
 echo "Record results (redacted IDs only) against the checklist in SANDBOX_E2E_GATE.md."
