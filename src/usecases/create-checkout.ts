@@ -15,6 +15,10 @@ export interface CreateCheckoutInput {
   customerEmail?: string;
   customerName?: string;
   publicApiOrigin: string;
+  /** Workers execution context — used for ctx.waitUntil on fire-and-forget
+   *  background work so the runtime doesn't kill the promise when the
+   *  response is sent. */
+  executionCtx?: Pick<ExecutionContext, 'waitUntil'>;
 }
 
 interface CreateCheckoutSuccessBody {
@@ -149,36 +153,31 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
 
   const { createCheckout, createCustomer } = await import('../lib/verifone');
 
-  // Fire customer creation without blocking checkout. If it resolves before
-  // checkout finishes, reuse its ID; otherwise discard it (best-effort only).
-  // The separate circuit breaker (verifone-customer vs verifone) ensures slow
-  // customer API doesn't trip the payment circuit.
-  let verifoneCustomerId: string | undefined;
-  // Fire customer creation async without awaiting. Fire-and-forget pattern:
-  // checkout takes priority and proceeds immediately, customer ID (if needed)
-  // is populated via side-effect if the promise settles before checkout finishes.
-  // eslint-disable-next-line no-unused-expressions
-  input.customerEmail
-    ? createCustomer(env, {
-        email: input.customerEmail,
-        ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
-        ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
-      })
-        .then((id) => {
-          verifoneCustomerId = id;
-        })
-        .catch((error) => {
-          console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
-          logPaymentEvent(env.DB, {
-            id: generateUUID(),
-            orderId,
-            eventType: 'customer_creation_failed',
-            source: 'verifone_api',
-            rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
-            verified: false,
-          }).catch(() => {}); // best-effort audit logging
-        })
-    : Promise.resolve();
+  // Fire customer creation as a background task via ctx.waitUntil so the
+  // runtime keeps the promise alive after the response is sent. The customer
+  // ID is NOT attached to this checkout — by the time createCheckout runs,
+  // the promise hasn't settled yet and the ID would be undefined. Customer
+  // creation is purely for future-order enrichment and must never block or
+  // fail the payment path. The separate circuit breaker (verifone-customer
+  // vs verifone) ensures slow customer API doesn't trip the payment circuit.
+  if (input.customerEmail && input.executionCtx) {
+    const customerPromise = createCustomer(env, {
+      email: input.customerEmail,
+      ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
+      ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
+    }).catch((error) => {
+      console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
+      logPaymentEvent(env.DB, {
+        id: generateUUID(),
+        orderId,
+        eventType: 'customer_creation_failed',
+        source: 'verifone_api',
+        rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
+        verified: false,
+      }).catch(() => {});
+    });
+    input.executionCtx.waitUntil(customerPromise);
+  }
 
   let checkoutResult: { checkoutId: string; checkoutUrl: string };
   try {
@@ -187,7 +186,6 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       amount: totalAmount,
       currency,
       returnUrl: returnUrl.toString(),
-      ...(verifoneCustomerId ? { customer: verifoneCustomerId } : {}),
     });
   } catch (error) {
     console.error(JSON.stringify({ message: 'Verifone checkout creation failed', order_id: orderId }));

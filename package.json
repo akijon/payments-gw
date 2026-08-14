@@ -36,14 +36,14 @@
     ]
   },
   "dependencies": {
-    "hono": "^4.13.1",
-    "lint-staged": "^17.3.0"
+    "hono": "^4.13.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.20.3",
     "@cloudflare/workers-types": "^5.20260728.1",
     "@oxlint/binding-linux-x64-gnu": "^1.77.0",
     "@vitest/coverage-istanbul": "^4.1.10",
+    "lint-staged": "^17.3.0",
     "oxlint": "^1.77.0",
     "prettier": "^3.9.6",
     "typescript": "^5.7.0",

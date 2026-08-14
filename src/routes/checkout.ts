@@ -114,6 +114,7 @@ checkoutRoute.post('/', async (c) => {
     customerEmail,
     customerName,
     publicApiOrigin,
+    executionCtx: c.executionCtx,
   });
   return c.json(outcome.body, outcome.status, 'headers' in outcome ? outcome.headers : undefined);
 });
