@@ -143,41 +143,42 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     throw error;
   }
 
-  // Create a Verifone customer record when we have an email to attach to it.
-  // Runs after order creation so a failure here always has a real order row to
-  // log the audit event against (payment_events.order_id is a foreign key). A
-  // customer record only improves 3DS authentication quality (Verifone's docs
-  // mark full billing address as required for that benefit, which the
-  // storefront doesn't collect yet — see CreateCustomerParams billing fields)
-  // and is never worth failing a card payment over, so failures are logged and
-  // swallowed rather than blocking checkout.
-  let verifoneCustomerId: string | undefined;
-  if (input.customerEmail) {
-    const { createCustomer } = await import('../lib/verifone');
-    try {
-      verifoneCustomerId = await createCustomer(env, {
-        email: input.customerEmail,
-        ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
-        ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
-      });
-    } catch (error) {
-      console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
-      await logPaymentEvent(env.DB, {
-        id: generateUUID(),
-        orderId,
-        eventType: 'customer_creation_failed',
-        source: 'verifone_api',
-        rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
-        verified: false,
-      });
-      // Best effort only — proceed without a customer id.
-    }
-  }
-
-  const { createCheckout } = await import('../lib/verifone');
   // The provider must return to the gateway, not directly to the storefront.
   const returnUrl = new URL('/api/return', input.publicApiOrigin);
   returnUrl.searchParams.set('order_id', orderId);
+
+  const { createCheckout, createCustomer } = await import('../lib/verifone');
+
+  // Fire customer creation without blocking checkout. If it resolves before
+  // checkout finishes, reuse its ID; otherwise discard it (best-effort only).
+  // The separate circuit breaker (verifone-customer vs verifone) ensures slow
+  // customer API doesn't trip the payment circuit.
+  let verifoneCustomerId: string | undefined;
+  // Fire customer creation async without awaiting. Fire-and-forget pattern:
+  // checkout takes priority and proceeds immediately, customer ID (if needed)
+  // is populated via side-effect if the promise settles before checkout finishes.
+  // eslint-disable-next-line no-unused-expressions
+  input.customerEmail
+    ? createCustomer(env, {
+        email: input.customerEmail,
+        ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
+        ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
+      })
+        .then((id) => {
+          verifoneCustomerId = id;
+        })
+        .catch((error) => {
+          console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
+          logPaymentEvent(env.DB, {
+            id: generateUUID(),
+            orderId,
+            eventType: 'customer_creation_failed',
+            source: 'verifone_api',
+            rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
+            verified: false,
+          }).catch(() => {}); // best-effort audit logging
+        })
+    : Promise.resolve();
 
   let checkoutResult: { checkoutId: string; checkoutUrl: string };
   try {

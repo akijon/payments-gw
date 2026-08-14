@@ -237,7 +237,7 @@ export async function createCustomer(env: Env, params: CreateCustomerParams): Pr
     ...(Object.keys(billing).length > 0 ? { billing } : {}),
   };
 
-  const resp = await withCircuitBreaker('verifone', () =>
+  const resp = await withCircuitBreaker('verifone-customer', () =>
     fetch(`${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`, {
       method: 'POST',
       headers: {
