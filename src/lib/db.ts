@@ -2,7 +2,7 @@
  * D1 query helpers — centralized access to the database
  */
 
-import type { Order, OrderStatus, LineItem } from '../types/api';
+import type { Order, OrderStatus, LineItem, PaymentMethod } from '../types/api';
 
 // ─── Order queries ──────────────────────────────────────────────
 
@@ -56,6 +56,7 @@ export async function updateOrderStatus(
     verifoneCheckoutId?: string;
     verifoneTransactionId?: string;
     landsbankinnSettlementId?: string;
+    paymentMethod?: PaymentMethod;
     paidAt?: string;
     settledAt?: string;
     allowedFrom?: OrderStatus[];
@@ -75,6 +76,10 @@ export async function updateOrderStatus(
   if (extra?.landsbankinnSettlementId) {
     sets.push('landsbankinn_settlement_id = ?');
     binds.push(extra.landsbankinnSettlementId);
+  }
+  if (extra?.paymentMethod) {
+    sets.push('payment_method = ?');
+    binds.push(extra.paymentMethod);
   }
   if (extra?.paidAt) {
     sets.push('paid_at = ?');
@@ -154,6 +159,7 @@ interface OrderRow {
   customer_email: string | null;
   customer_name: string | null;
   items_json: string;
+  payment_method: string | null;
   verifone_checkout_id: string | null;
   verifone_transaction_id: string | null;
   landsbankinn_settlement_id: string | null;
@@ -161,6 +167,12 @@ interface OrderRow {
   updated_at: string;
   paid_at: string | null;
   settled_at: string | null;
+}
+
+const PAYMENT_METHODS: ReadonlySet<PaymentMethod> = new Set(['card', 'paypal', 'apple_pay', 'google_pay', 'unknown']);
+
+function storedPaymentMethod(value: string | null): PaymentMethod {
+  return value !== null && PAYMENT_METHODS.has(value as PaymentMethod) ? (value as PaymentMethod) : 'unknown';
 }
 
 function rowToOrder(row: OrderRow): Order {
@@ -173,6 +185,7 @@ function rowToOrder(row: OrderRow): Order {
     customer_email: row.customer_email ?? undefined,
     customer_name: row.customer_name ?? undefined,
     items: JSON.parse(row.items_json),
+    payment_method: storedPaymentMethod(row.payment_method),
     verifone_checkout_id: row.verifone_checkout_id ?? undefined,
     verifone_transaction_id: row.verifone_transaction_id ?? undefined,
     landsbankinn_settlement_id: row.landsbankinn_settlement_id ?? undefined,
@@ -368,6 +381,7 @@ export interface AtomicWebhookTransition {
   status: 'paid' | 'failed' | 'refunded';
   rawPayload: string;
   verifoneTransactionId?: string;
+  paymentMethod?: PaymentMethod;
 }
 
 /** Apply the idempotency marker, legal order transition, and audit event in one D1 batch. */
@@ -394,10 +408,11 @@ export async function processWebhookAtomically(
     .prepare(
       `UPDATE orders SET status = ?, updated_at = datetime('now'),
        paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE paid_at END,
-       verifone_transaction_id = COALESCE(?, verifone_transaction_id)
+       verifone_transaction_id = COALESCE(?, verifone_transaction_id),
+       payment_method = COALESCE(?, payment_method)
      WHERE id = ? AND ${allowedFrom} AND (SELECT changes()) = 1`,
     )
-    .bind(input.status, input.status, input.verifoneTransactionId ?? null, input.orderId);
+    .bind(input.status, input.status, input.verifoneTransactionId ?? null, input.paymentMethod ?? null, input.orderId);
   const event = db
     .prepare(
       `INSERT INTO payment_events (id, order_id, event_type, source, verifone_event_id, raw_payload, verified)
@@ -416,6 +431,7 @@ export interface AtomicReturnTransition {
   eventType: 'transaction_success' | 'transaction_failed';
   transactionId?: string;
   rawPayload: string;
+  paymentMethod?: PaymentMethod;
 }
 
 /** Apply a verified browser-return transition and its audit event atomically. */
@@ -431,10 +447,11 @@ export async function processReturnAtomically(db: D1Database, input: AtomicRetur
     .prepare(
       `UPDATE orders SET status = ?, updated_at = datetime('now'),
        paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE paid_at END,
-       verifone_transaction_id = COALESCE(?, verifone_transaction_id)
+       verifone_transaction_id = COALESCE(?, verifone_transaction_id),
+       payment_method = COALESCE(?, payment_method)
      WHERE id = ? AND ${allowedFrom}`,
     )
-    .bind(input.status, input.status, input.transactionId ?? null, input.orderId);
+    .bind(input.status, input.status, input.transactionId ?? null, input.paymentMethod ?? null, input.orderId);
   const event = db
     .prepare(
       `INSERT INTO payment_events (id, order_id, event_type, source, verifone_event_id, raw_payload, verified)
@@ -469,6 +486,7 @@ export interface ReconciliationOrder {
   status: string;
   amount: number;
   currency: string;
+  payment_method: string | null;
   verifone_transaction_id: string | null;
   landsbankinn_settlement_id: string | null;
 }
@@ -587,7 +605,7 @@ export async function recordReconciliationException(
 export async function getOrderByOrderNumber(db: D1Database, orderNumber: string): Promise<ReconciliationOrder | null> {
   const row = await db
     .prepare(
-      `SELECT id, status, amount, currency, verifone_transaction_id, landsbankinn_settlement_id
+      `SELECT id, status, amount, currency, payment_method, verifone_transaction_id, landsbankinn_settlement_id
        FROM orders WHERE order_number = ?`,
     )
     .bind(orderNumber)

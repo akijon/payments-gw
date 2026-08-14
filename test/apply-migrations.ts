@@ -175,6 +175,12 @@ const MIGRATION_0007 = `
 CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
 `;
 
+const MIGRATION_0008 = `
+ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'card'
+  CHECK (payment_method IN ('card', 'paypal', 'apple_pay', 'google_pay', 'unknown'));
+CREATE INDEX IF NOT EXISTS idx_orders_payment_method ON orders(payment_method);
+`;
+
 function splitSql(sql: string): string[] {
   return sql
     .split(';')
@@ -192,6 +198,7 @@ beforeAll(async () => {
     { name: '0005_order_invariants.sql', queries: MIGRATION_0005_QUERIES },
     { name: '0006_reconciliation_runs.sql', queries: splitSql(MIGRATION_0006) },
     { name: '0007_order_number_index.sql', queries: splitSql(MIGRATION_0007) },
+    { name: '0008_payment_method.sql', queries: splitSql(MIGRATION_0008) },
   ];
   await applyD1Migrations(env.DB, migrations);
 });

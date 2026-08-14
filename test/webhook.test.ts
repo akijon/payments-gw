@@ -20,15 +20,17 @@ vi.mock('../src/lib/verifone', () => ({
     merchant_reference: 'IRJA-20260725-HOOK',
     events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-s2s', timestamp: new Date().toISOString() }],
     transaction_id: 'txn-s2s',
+    payment_product: 'VISA', // Mock as card payment by default
   })),
   parseCheckoutResult: vi.fn().mockReturnValue({ status: 'success', transactionId: 'txn-s2s' }),
+  normalizePaymentMethod: vi.fn().mockReturnValue('card'), // Mock as card by default
 }));
 
 beforeEach(async () => {
   await env.DB.exec(
     'DELETE FROM checkout_attempts; DELETE FROM order_access_tokens; DELETE FROM payment_events; DELETE FROM processed_webhooks; DELETE FROM orders;',
   );
-  const { getCheckout, parseCheckoutResult } = await import('../src/lib/verifone');
+  const { getCheckout, parseCheckoutResult, normalizePaymentMethod } = await import('../src/lib/verifone');
   vi.mocked(getCheckout).mockImplementation(async (_env: unknown, checkoutId: string) => ({
     id: checkoutId,
     status: 'COMPLETED',
@@ -37,8 +39,10 @@ beforeEach(async () => {
     merchant_reference: 'IRJA-20260725-HOOK',
     events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-s2s', timestamp: new Date().toISOString() }],
     transaction_id: 'txn-s2s',
+    payment_product: 'VISA', // Mock as card payment by default
   }));
   vi.mocked(parseCheckoutResult).mockReturnValue({ status: 'success', transactionId: 'txn-s2s' });
+  vi.mocked(normalizePaymentMethod).mockReturnValue('card');
 });
 
 async function seedOrder(checkoutId: string, amount = 18000) {
@@ -62,7 +66,14 @@ function webhookPayload(eventType: string, checkoutId: string, contentId?: strin
     eventDateTime: new Date().toISOString(),
     source: 'Verifone',
     content: contentId
-      ? { id: contentId, amount: 18000, currency_code: 'ISK', transaction_type: 'SALE', transaction_status: 'SETTLED' }
+      ? {
+          id: contentId,
+          amount: 18000,
+          currency_code: 'ISK',
+          transaction_type: 'SALE',
+          transaction_status: 'SETTLED',
+          payment_product: 'VISA', // Mock as card payment by default
+        }
       : undefined,
   });
 }
@@ -107,6 +118,34 @@ describe('POST /api/webhooks/verifone', () => {
     expect(order!.status).toBe('paid');
     expect(order!.paid_at).not.toBeNull();
     expect(order!.verifone_transaction_id).toBe('txn-s2s');
+  });
+
+  it('persists PayPal from a verified payment provider response', async () => {
+    const checkoutId = 'chk-wh-paypal';
+    const orderId = await seedOrder(checkoutId);
+    const { getCheckout, normalizePaymentMethod } = await import('../src/lib/verifone');
+    vi.mocked(getCheckout).mockResolvedValueOnce({
+      id: checkoutId,
+      status: 'COMPLETED',
+      amount: 18000,
+      currency_code: 'ISK',
+      merchant_reference: 'IRJA-20260725-HOOK',
+      events: [{ type: 'TRANSACTION_SUCCESS', id: 'txn-paypal-webhook', timestamp: new Date().toISOString() }],
+      transaction_id: 'txn-paypal-webhook',
+      payment_product: 'PAYPAL',
+    });
+    vi.mocked(normalizePaymentMethod).mockReturnValue('paypal');
+
+    const response = await SELF.fetch('https://test.example.com/api/webhooks/verifone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-vfi-jws': 'valid.jws.sig' },
+      body: webhookPayload('Checkout - Transaction succeeded', checkoutId, 'txn-paypal-webhook'),
+    });
+
+    expect(response).toHaveProperty('status', 200);
+    const order = await env.DB.prepare('SELECT status, payment_method FROM orders WHERE id = ?').bind(orderId).first();
+    expect(order).toMatchObject({ status: 'paid', payment_method: 'paypal' });
+    expect(normalizePaymentMethod).toHaveBeenCalledWith('PAYPAL');
   });
 
   it('updates order to failed on "Checkout - Transaction failed" once the provider confirms it', async () => {

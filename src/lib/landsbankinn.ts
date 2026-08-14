@@ -5,6 +5,7 @@
 import type { Env } from '../types/env';
 import type { LandsbankinnSettlement, LandsbankinnTransaction } from '../types/api';
 import { withCircuitBreaker } from './circuit-breaker';
+import { getOAuth2ClientCredentialsToken } from './oauth';
 
 const TOKEN_KEY = 'landsbankinn_oauth_token';
 const TOKEN_BUFFER_MS = 30_000;
@@ -45,49 +46,18 @@ function expectArray<T>(value: unknown, operation: string): T[] {
 }
 
 export async function getLandsbankinnToken(env: Env): Promise<string> {
-  const cached = await env.CACHE.get<{ token: string; expiresAt: number }>(TOKEN_KEY, 'json');
-  if (
-    cached &&
-    typeof cached.token === 'string' &&
-    cached.token.length > 0 &&
-    cached.token.length <= 8192 &&
-    Number.isSafeInteger(cached.expiresAt) &&
-    cached.expiresAt > Date.now() + TOKEN_BUFFER_MS
-  ) {
-    return cached.token;
-  }
-
-  const data = await fetchJson(
-    apiUrl(env.LANDSBANKINN_OAUTH_URL, ''),
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: env.LANDSBANKINN_CLIENT_ID,
-        client_secret: env.LANDSBANKINN_CLIENT_SECRET,
-        scope: env.LANDSBANKINN_SCOPE,
-      }),
-    },
-    'Landsbankinn OAuth2',
-  );
-  if (!data || typeof data !== 'object') throw new Error('Landsbankinn OAuth2 returned an invalid response shape');
-  const { access_token: token, expires_in: expiresIn } = data as Record<string, unknown>;
-  if (
-    typeof token !== 'string' ||
-    token.length === 0 ||
-    token.length > 8192 ||
-    !Number.isSafeInteger(expiresIn) ||
-    (expiresIn as number) <= 30 ||
-    (expiresIn as number) > 604_800
-  ) {
-    throw new Error('Landsbankinn OAuth2 returned invalid token metadata');
-  }
-
-  const ttlSeconds = (expiresIn as number) - Math.ceil(TOKEN_BUFFER_MS / 1000);
-  const tokenData = { token, expiresAt: Date.now() + (expiresIn as number) * 1000 };
-  await env.CACHE.put(TOKEN_KEY, JSON.stringify(tokenData), { expirationTtl: ttlSeconds });
-  return token;
+  return getOAuth2ClientCredentialsToken({
+    cache: env.CACHE,
+    cacheKey: TOKEN_KEY,
+    breakerKey: 'landsbankinn',
+    tokenUrl: env.LANDSBANKINN_OAUTH_URL,
+    clientId: env.LANDSBANKINN_CLIENT_ID,
+    clientSecret: env.LANDSBANKINN_CLIENT_SECRET,
+    scope: env.LANDSBANKINN_SCOPE,
+    operation: 'Landsbankinn OAuth2',
+    bufferMs: TOKEN_BUFFER_MS,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
 }
 
 async function authenticatedGet(env: Env, path: string, operation: string): Promise<unknown> {

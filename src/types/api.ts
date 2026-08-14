@@ -7,6 +7,8 @@
 export type OrderStatus =
   'pending' | 'checkout_created' | 'payment_pending' | 'paid' | 'failed' | 'refunded' | 'settled';
 
+export type PaymentMethod = 'card' | 'paypal' | 'apple_pay' | 'google_pay' | 'unknown';
+
 /**
  * Stored / response line item after catalog resolution.
  * unit_price and total_amount always come from the server catalog — never the client.
@@ -39,6 +41,7 @@ export interface Order {
   customer_email?: string;
   customer_name?: string;
   items: LineItem[];
+  payment_method?: PaymentMethod; // Determined from Verifone response after payment
   verifone_checkout_id?: string;
   verifone_transaction_id?: string;
   landsbankinn_settlement_id?: string;
@@ -50,6 +53,32 @@ export interface Order {
 
 // ─── Verifone types ──────────────────────────────────────────────
 
+/** Nested wallet config: contract ID only until Task 0 confirms extra fields. */
+export interface VerifoneWalletConfiguration {
+  payment_contract_id: string;
+}
+
+export interface VerifoneCardConfiguration {
+  mode: 'PAYMENT' | '3DS_PAYMENT' | '3DS' | 'CARD_CAPTURE';
+  payment_contract_id: string;
+  capture_now: boolean;
+  threed_secure?: {
+    enabled: boolean;
+    threeds_contract_id: string;
+  };
+}
+
+/**
+ * Provider request configurations. Card is always present.
+ * Wallet keys are omitted (not undefined) when the corresponding Env contract is unset.
+ */
+export interface VerifoneCheckoutConfigurations {
+  card: VerifoneCardConfiguration;
+  paypal?: VerifoneWalletConfiguration;
+  apple_pay?: VerifoneWalletConfiguration;
+  google_pay?: VerifoneWalletConfiguration;
+}
+
 export interface VerifoneCheckoutRequest {
   entity_id: string;
   currency_code: string;
@@ -57,17 +86,7 @@ export interface VerifoneCheckoutRequest {
   merchant_reference: string;
   return_url: string;
   interaction_type: 'HPP' | 'IFRAME' | 'PAYMENT_LINK';
-  configurations: {
-    card: {
-      mode: 'PAYMENT' | '3DS_PAYMENT' | '3DS' | 'CARD_CAPTURE';
-      payment_contract_id: string;
-      capture_now: boolean;
-      threed_secure?: {
-        enabled: boolean;
-        threeds_contract_id: string;
-      };
-    };
-  };
+  configurations: VerifoneCheckoutConfigurations;
 }
 
 export interface VerifoneCheckoutResponse {
@@ -93,6 +112,7 @@ export interface VerifoneCheckoutDetail {
   amount?: number;
   currency_code?: string;
   merchant_reference?: string;
+  payment_product?: string; // Payment method used: PAYPAL, VISA, MASTERCARD, etc.
 }
 
 // ─── Webhook types ───────────────────────────────────────────────
