@@ -14,6 +14,7 @@ export interface CreateCheckoutInput {
   items: unknown;
   customerEmail?: string;
   customerName?: string;
+  buyerKennitala?: string;
   publicApiOrigin: string;
   /** Workers execution context — used for ctx.waitUntil on fire-and-forget
    *  background work so the runtime doesn't kill the promise when the
@@ -72,6 +73,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       items: input.items,
       customer_email: input.customerEmail ?? null,
       customer_name: input.customerName ?? null,
+      buyer_kennitala: input.buyerKennitala ?? null,
     }),
   );
   const claim = await claimCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
@@ -139,6 +141,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       amount: totalAmount,
       customerEmail: input.customerEmail,
       customerName: input.customerName,
+      buyerKennitala: input.buyerKennitala,
       items,
       accessToken: orderAccessToken,
     });

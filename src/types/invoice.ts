@@ -1,0 +1,88 @@
+/**
+ * Icelandic invoice types — legally compliant sölureikningur.
+ *
+ * Implements the mandatory fields from Lög um virðisaukaskatt nr. 50/1988
+ * and reglugerð nr. 505/2013.
+ */
+
+import type { LineItem } from './api';
+
+/** VAT rates recognised in Icelandic tax law. */
+export type VatRate = 24 | 11 | 0;
+
+/** Seller identity — all fields legally required on every invoice. */
+export interface SellerInfo {
+  name: string;
+  kennitala: string;
+  vsk_number: string;
+  address: string;
+  email: string;
+  phone?: string;
+}
+
+/** Buyer identity — kennitala required for B2B, optional for B2C receipts. */
+export interface BuyerInfo {
+  name: string;
+  kennitala?: string;
+  address?: string;
+  email?: string;
+}
+
+/** Line item with VAT breakdown for invoice display. */
+export interface InvoiceLineItem {
+  sku: string;
+  description: string;
+  quantity: number;
+  unit_price_excl_vat: number; // minor units
+  vat_rate: VatRate;
+  vat_amount: number; // minor units
+  total_incl_vat: number; // minor units
+}
+
+/** VAT breakdown by rate. */
+export interface VatBreakdownEntry {
+  rate: VatRate;
+  taxable_base: number; // minor units, excl. VAT
+  vat_amount: number; // minor units
+}
+
+/** Full invoice payload matching the JSON schema. */
+export interface Invoice {
+  header: {
+    invoice_number: string;
+    issue_date: string; // YYYY-MM-DD
+    due_date: string | null; // YYYY-MM-DD or null
+    delivery_date: string | null;
+    currency: string; // ISO 4217
+  };
+  seller: SellerInfo;
+  buyer: BuyerInfo;
+  items: InvoiceLineItem[];
+  summary: {
+    subtotal_excl_vat: number;
+    vat_breakdown: VatBreakdownEntry[];
+    total_amount_incl_vat: number;
+  };
+}
+
+/** Invoice record as stored in D1. */
+export interface InvoiceRecord {
+  id: string;
+  order_id: string;
+  invoice_number: string;
+  issue_date: string;
+  due_date: string | null;
+  delivery_date: string | null;
+  buyer_kennitala: string | null;
+  status: 'issued' | 'void' | 'corrected';
+  payload_json: string | null;
+  created_at: string;
+}
+
+/**
+ * Extended LineItem carrying the VAT rate from the product catalog.
+ * This is what invoice computation receives after catalog resolution.
+ */
+export interface VatLineItem extends LineItem {
+  vat_rate: VatRate;
+}

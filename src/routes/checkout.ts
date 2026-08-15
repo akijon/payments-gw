@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types/env';
 import { enforceCheckoutRateLimit } from '../lib/rate-limit';
 import { acceptsJson, readTextBody, RequestBodyTooLargeError } from '../lib/http';
+import { isValidKennitala } from '../lib/invoice-computation';
 import { createCheckoutUseCase } from '../usecases/create-checkout';
 
 const MAX_CHECKOUT_BODY_BYTES = 16 * 1024;
@@ -42,6 +43,7 @@ checkoutRoute.post('/', async (c) => {
     items?: unknown;
     customer_email?: unknown;
     customer_name?: unknown;
+    buyer_kennitala?: unknown;
     unit_price?: unknown;
     total_amount?: unknown;
     amount?: unknown;
@@ -60,7 +62,7 @@ checkoutRoute.post('/', async (c) => {
     return c.json({ error: 'Invalid JSON body', code: 'validation' }, 400);
   }
 
-  const allowedFields = new Set(['items', 'customer_email', 'customer_name']);
+  const allowedFields = new Set(['items', 'customer_email', 'customer_name', 'buyer_kennitala']);
   const unexpectedFields = Object.keys(body).filter((field) => !allowedFields.has(field));
   if (unexpectedFields.length > 0) {
     const moneyFields = unexpectedFields.filter((field) => ['amount', 'unit_price', 'total_amount'].includes(field));
@@ -108,11 +110,32 @@ checkoutRoute.post('/', async (c) => {
   // otherwise the origin serving this request is the correct callback origin.
   const publicApiOrigin = c.env.PUBLIC_API_URL ?? new URL(c.req.url).origin;
 
+  // Validate buyer kennitala if provided
+  let buyerKennitala: string | undefined;
+  if (body.buyer_kennitala !== undefined && body.buyer_kennitala !== null) {
+    if (typeof body.buyer_kennitala !== 'string') {
+      return c.json({ error: 'Invalid buyer_kennitala', code: 'validation' }, 400);
+    }
+    const ktDigits = body.buyer_kennitala.replace(/\D/g, '');
+    if (ktDigits.length !== 10 || !/^\d{10}$/.test(ktDigits)) {
+      return c.json({ error: 'buyer_kennitala must be 10 digits', code: 'validation' }, 400);
+    }
+    // Validate the kennitala checksum before accepting payment — an invalid
+    // kennitala means the order can never get an invoice (the invoice endpoint
+    // returns 422). Reject early so the customer is never charged for an
+    // order that can't be invoiced.
+    if (!isValidKennitala(ktDigits)) {
+      return c.json({ error: 'buyer_kennitala checksum is invalid', code: 'invalid_kennitala' }, 422);
+    }
+    buyerKennitala = ktDigits;
+  }
+
   const outcome = await createCheckoutUseCase(c.env, {
     idempotencyKey,
     items: body.items,
     customerEmail,
     customerName,
+    buyerKennitala,
     publicApiOrigin,
     executionCtx: c.executionCtx,
   });

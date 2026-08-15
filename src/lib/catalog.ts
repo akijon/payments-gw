@@ -5,7 +5,7 @@
  * unit_price / total_amount from the client are never trusted.
  */
 
-import type { LineItem } from '../types/api';
+import type { VatLineItem } from '../types/invoice';
 
 export interface Product {
   id: string;
@@ -14,6 +14,7 @@ export interface Product {
   unit_price: number; // minor units
   currency: string;
   active: boolean;
+  vat_rate: number; // 24, 11, or 0
 }
 
 export interface CheckoutRequestItem {
@@ -59,11 +60,12 @@ interface ProductRow {
   unit_price: number;
   currency: string;
   active: number;
+  vat_rate: number;
 }
 
 export async function getProduct(db: D1Database, productId: string): Promise<Product | null> {
   const row = await db
-    .prepare('SELECT id, name, description, unit_price, currency, active FROM products WHERE id = ?')
+    .prepare('SELECT id, name, description, unit_price, currency, active, vat_rate FROM products WHERE id = ?')
     .bind(productId)
     .first<ProductRow>();
 
@@ -75,6 +77,7 @@ export async function getProduct(db: D1Database, productId: string): Promise<Pro
     unit_price: row.unit_price,
     currency: row.currency,
     active: row.active === 1,
+    vat_rate: row.vat_rate,
   };
 }
 
@@ -85,7 +88,9 @@ export async function getProductsByIds(db: D1Database, productIds: string[]): Pr
 
   const placeholders = unique.map(() => '?').join(', ');
   const result = await db
-    .prepare(`SELECT id, name, description, unit_price, currency, active FROM products WHERE id IN (${placeholders})`)
+    .prepare(
+      `SELECT id, name, description, unit_price, currency, active, vat_rate FROM products WHERE id IN (${placeholders})`,
+    )
     .bind(...unique)
     .all<ProductRow>();
   for (const row of result.results) {
@@ -96,6 +101,7 @@ export async function getProductsByIds(db: D1Database, productIds: string[]): Pr
       unit_price: row.unit_price,
       currency: row.currency,
       active: row.active === 1,
+      vat_rate: row.vat_rate,
     });
   }
   return map;
@@ -108,7 +114,7 @@ export async function getProductsByIds(db: D1Database, productIds: string[]): Pr
 export async function resolveCheckoutItems(
   db: D1Database,
   rawItems: unknown,
-): Promise<{ items: LineItem[]; totalAmount: number; currency: string }> {
+): Promise<{ items: VatLineItem[]; totalAmount: number; currency: string }> {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new CatalogError('items is required and must be a non-empty array', 'empty_cart');
   }
@@ -219,7 +225,7 @@ export async function resolveCheckoutItems(
   }
 
   const catalog = await getProductsByIds(db, productIds);
-  const lineItems: LineItem[] = [];
+  const lineItems: VatLineItem[] = [];
   let totalAmount = 0;
   let currency: string | undefined;
 
@@ -253,6 +259,7 @@ export async function resolveCheckoutItems(
       unit_price: product.unit_price,
       total_amount: lineTotal,
       sku: product.id,
+      vat_rate: product.vat_rate as VatLineItem['vat_rate'],
     });
   }
 

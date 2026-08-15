@@ -15,13 +15,14 @@ export async function createOrder(
     amount: number;
     customerEmail?: string;
     customerName?: string;
+    buyerKennitala?: string;
     items: LineItem[];
   },
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, items_json)
-     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)`,
+      `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, buyer_kennitala, items_json)
+     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       params.id,
@@ -30,6 +31,7 @@ export async function createOrder(
       params.amount,
       params.customerEmail ?? null,
       params.customerName ?? null,
+      params.buyerKennitala ?? null,
       JSON.stringify(params.items),
     )
     .run();
@@ -158,6 +160,7 @@ interface OrderRow {
   amount: number;
   customer_email: string | null;
   customer_name: string | null;
+  buyer_kennitala: string | null;
   items_json: string;
   payment_method: string | null;
   verifone_checkout_id: string | null;
@@ -184,6 +187,7 @@ function rowToOrder(row: OrderRow): Order {
     amount: row.amount,
     customer_email: row.customer_email ?? undefined,
     customer_name: row.customer_name ?? undefined,
+    buyer_kennitala: row.buyer_kennitala ?? undefined,
     items: JSON.parse(row.items_json),
     payment_method: storedPaymentMethod(row.payment_method),
     verifone_checkout_id: row.verifone_checkout_id ?? undefined,
@@ -233,6 +237,7 @@ export async function createOrderWithAccessToken(
     amount: number;
     customerEmail?: string;
     customerName?: string;
+    buyerKennitala?: string;
     items: LineItem[];
     accessToken: string;
   },
@@ -240,8 +245,8 @@ export async function createOrderWithAccessToken(
   await db.batch([
     db
       .prepare(
-        `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, items_json)
-       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)`,
+        `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, buyer_kennitala, items_json)
+       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         params.id,
@@ -250,6 +255,7 @@ export async function createOrderWithAccessToken(
         params.amount,
         params.customerEmail ?? null,
         params.customerName ?? null,
+        params.buyerKennitala ?? null,
         JSON.stringify(params.items),
       ),
     db

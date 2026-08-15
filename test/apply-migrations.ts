@@ -181,6 +181,32 @@ ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'card'
 CREATE INDEX IF NOT EXISTS idx_orders_payment_method ON orders(payment_method);
 `;
 
+const MIGRATION_0009 = `
+ALTER TABLE products ADD COLUMN vat_rate INTEGER NOT NULL DEFAULT 24
+  CHECK (vat_rate IN (0, 11, 24));
+ALTER TABLE orders ADD COLUMN buyer_kennitala TEXT;
+CREATE TABLE IF NOT EXISTS invoices (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL UNIQUE,
+    invoice_number TEXT NOT NULL UNIQUE,
+    issue_date TEXT NOT NULL,
+    due_date TEXT,
+    delivery_date TEXT,
+    buyer_kennitala TEXT,
+    status TEXT NOT NULL DEFAULT 'issued',
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    CHECK (status IN ('issued', 'void', 'corrected'))
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_order_id ON invoices(order_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_invoice_number ON invoices(invoice_number);
+CREATE TABLE IF NOT EXISTS invoice_sequence (
+    year INTEGER PRIMARY KEY,
+    next_number INTEGER NOT NULL DEFAULT 1
+);
+`;
+
 function splitSql(sql: string): string[] {
   return sql
     .split(';')
@@ -199,6 +225,7 @@ beforeAll(async () => {
     { name: '0006_reconciliation_runs.sql', queries: splitSql(MIGRATION_0006) },
     { name: '0007_order_number_index.sql', queries: splitSql(MIGRATION_0007) },
     { name: '0008_payment_method.sql', queries: splitSql(MIGRATION_0008) },
+    { name: '0009_invoice_tables.sql', queries: splitSql(MIGRATION_0009) },
   ];
   await applyD1Migrations(env.DB, migrations);
 });
