@@ -75,6 +75,7 @@ export interface InvoiceRecord {
   delivery_date: string | null;
   buyer_kennitala: string | null;
   status: 'issued' | 'void' | 'corrected';
+  payload_json: string | null;
   created_at: string;
 }
 

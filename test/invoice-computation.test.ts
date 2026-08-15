@@ -1,6 +1,10 @@
 /**
  * Invoice computation unit tests — VAT calculation, rounding,
  * kennitala validation, and invoice assembly.
+ *
+ * Icelandic consumer prices are VAT-INCLUSIVE: the catalog unit_price is what
+ * the customer pays. computeInvoice reverse-extracts the excl-VAT base and VAT
+ * amount from the inclusive price so that total_amount_incl_vat == order.amount.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -48,8 +52,9 @@ function makeItem(
 }
 
 describe('Invoice computation', () => {
-  describe('VAT calculation', () => {
-    it('computes 24% VAT correctly', () => {
+  describe('VAT calculation (VAT-inclusive pricing)', () => {
+    it('decomposes 24% VAT-inclusive price correctly', () => {
+      // unit_price 8065 is VAT-inclusive (what customer pays)
       const invoice = computeInvoice({
         items: [makeItem(8065, 1, 24)],
         currency: 'ISK',
@@ -59,18 +64,22 @@ describe('Invoice computation', () => {
         issueDate: '2026-08-15',
       });
       expect(invoice).not.toBeNull();
-      expect(invoice!.items[0].unit_price_excl_vat).toBe(8065);
+      // excl = round(8065 * 100 / 124) = round(6504.03) = 6504
+      expect(invoice!.items[0].unit_price_excl_vat).toBe(6504);
       expect(invoice!.items[0].vat_rate).toBe(24);
-      expect(invoice!.items[0].vat_amount).toBe(1936); // round(8065 * 24 / 100) = round(1935.6) = 1936
-      expect(invoice!.items[0].total_incl_vat).toBe(10001); // 8065 + 1936
-      expect(invoice!.summary.subtotal_excl_vat).toBe(8065);
+      // vat = 8065 - 6504 = 1561
+      expect(invoice!.items[0].vat_amount).toBe(1561);
+      // total_incl = charged amount (8065)
+      expect(invoice!.items[0].total_incl_vat).toBe(8065);
+      expect(invoice!.summary.subtotal_excl_vat).toBe(6504);
       expect(invoice!.summary.vat_breakdown).toEqual([
-        { rate: 24, taxable_base: 8065, vat_amount: 1936 },
+        { rate: 24, taxable_base: 6504, vat_amount: 1561 },
       ]);
-      expect(invoice!.summary.total_amount_incl_vat).toBe(10001);
+      // total must equal charged amount
+      expect(invoice!.summary.total_amount_incl_vat).toBe(8065);
     });
 
-    it('computes 11% reduced VAT correctly', () => {
+    it('decomposes 11% reduced VAT-inclusive price correctly', () => {
       const invoice = computeInvoice({
         items: [makeItem(10000, 1, 11)],
         currency: 'ISK',
@@ -80,16 +89,20 @@ describe('Invoice computation', () => {
         issueDate: '2026-08-15',
       });
       expect(invoice).not.toBeNull();
-      expect(invoice!.items[0].vat_amount).toBe(1100); // 10000 * 11 / 100 = 1100
-      expect(invoice!.items[0].total_incl_vat).toBe(11100);
+      // excl = round(10000 * 100 / 111) = round(9009.01) = 9009
+      expect(invoice!.items[0].unit_price_excl_vat).toBe(9009);
+      // vat = 10000 - 9009 = 991
+      expect(invoice!.items[0].vat_amount).toBe(991);
+      // total_incl = charged amount
+      expect(invoice!.items[0].total_incl_vat).toBe(10000);
       expect(invoice!.summary.vat_breakdown[0]).toEqual({
         rate: 11,
-        taxable_base: 10000,
-        vat_amount: 1100,
+        taxable_base: 9009,
+        vat_amount: 991,
       });
     });
 
-    it('computes 0% VAT correctly', () => {
+    it('handles 0% VAT (excl == incl)', () => {
       const invoice = computeInvoice({
         items: [makeItem(5000, 2, 0)],
         currency: 'ISK',
@@ -100,6 +113,7 @@ describe('Invoice computation', () => {
       });
       expect(invoice).not.toBeNull();
       expect(invoice!.items[0].vat_amount).toBe(0);
+      expect(invoice!.items[0].unit_price_excl_vat).toBe(5000);
       expect(invoice!.items[0].total_incl_vat).toBe(10000);
       expect(invoice!.summary.total_amount_incl_vat).toBe(10000);
     });
@@ -117,9 +131,14 @@ describe('Invoice computation', () => {
         issueDate: '2026-08-15',
       });
       expect(invoice).not.toBeNull();
+      // Item A: excl = round(5000*100/124) = 4032, vat = 5000-4032 = 968
+      // Item B: excl = round(3000*100/124) = 2419, vat = 6000-2419*2 = 1162
+      // taxable_base = 4032 + 2419*2 = 8870, vat = 968 + 1162 = 2130
       expect(invoice!.summary.vat_breakdown).toHaveLength(1);
-      expect(invoice!.summary.vat_breakdown[0].taxable_base).toBe(11000); // 5000 + 6000
-      expect(invoice!.summary.vat_breakdown[0].vat_amount).toBe(2640); // round(11000 * 24/100) = 2640
+      expect(invoice!.summary.vat_breakdown[0].taxable_base).toBe(8870);
+      expect(invoice!.summary.vat_breakdown[0].vat_amount).toBe(2130);
+      // total_incl = 5000 + 6000 = 11000 (charged amount)
+      expect(invoice!.summary.total_amount_incl_vat).toBe(11000);
     });
 
     it('creates separate VAT breakdown entries for different rates', () => {
@@ -141,6 +160,8 @@ describe('Invoice computation', () => {
       expect(invoice!.summary.vat_breakdown[0].rate).toBe(24);
       expect(invoice!.summary.vat_breakdown[1].rate).toBe(11);
       expect(invoice!.summary.vat_breakdown[2].rate).toBe(0);
+      // total_incl must equal charged amount: 10000+10000+5000 = 25000
+      expect(invoice!.summary.total_amount_incl_vat).toBe(25000);
     });
 
     it('returns null for empty items', () => {
@@ -157,8 +178,8 @@ describe('Invoice computation', () => {
   });
 
   describe('Rounding', () => {
-    it('rounds half-up to nearest aurar', () => {
-      // 8065 * 24 / 100 = 1935.6 → rounds to 1936
+    it('reverse-extracts excl-VAT with half-up rounding', () => {
+      // 8065 incl @ 24% → excl = round(8065*100/124) = round(6504.032) = 6504
       const invoice = computeInvoice({
         items: [makeItem(8065, 1, 24)],
         currency: 'ISK',
@@ -167,11 +188,12 @@ describe('Invoice computation', () => {
         invoiceNumber: 'REIK-2026-00001',
         issueDate: '2026-08-15',
       });
-      expect(invoice!.items[0].vat_amount).toBe(1936);
+      expect(invoice!.items[0].unit_price_excl_vat).toBe(6504);
+      expect(invoice!.items[0].vat_amount).toBe(1561);
     });
 
-    it('rounds exact divisions without error', () => {
-      // 10000 * 24 / 100 = 2400 exactly
+    it('handles exact divisions without error', () => {
+      // 10000 incl @ 24% → excl = round(10000*100/124) = round(8064.516) = 8065
       const invoice = computeInvoice({
         items: [makeItem(10000, 1, 24)],
         currency: 'ISK',
@@ -180,7 +202,8 @@ describe('Invoice computation', () => {
         invoiceNumber: 'REIK-2026-00001',
         issueDate: '2026-08-15',
       });
-      expect(invoice!.items[0].vat_amount).toBe(2400);
+      expect(invoice!.items[0].unit_price_excl_vat).toBe(8065);
+      expect(invoice!.items[0].vat_amount).toBe(1935); // 10000 - 8065
     });
 
     it('roundToIsk rounds to nearest 100 aurar', () => {
@@ -202,6 +225,32 @@ describe('Invoice computation', () => {
     it('rejects invalid checksum', () => {
       // 010130-3029: checksum should be 1, but digit 8 is 2
       expect(isValidKennitala('010130-3029')).toBe(false);
+    });
+
+    it('rejects kennitala where intermediate == 10 (no valid check digit)', () => {
+      // A kennitala where the weighted sum mod 11 == 1 produces intermediate 10,
+      // which has no valid check digit. This is the edge case the old
+      // (11 - sum%11) % 10 formula incorrectly mapped to 0.
+      // Find a kennitala with sum%11 == 1: digits 00000000X9
+      // d0..d7 = 0,0,0,0,0,0,0,0 → sum=0, intermediate=11 → checksum=0
+      // d0..d7 = 0,0,0,0,0,0,0,1 → sum=2, intermediate=9
+      // We need sum%11==1: d0=0,d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=? 
+      // weight for d7 is 2, so d7*2 must give sum%11==1 → d7*2=1 mod 11 → no integer
+      // Try d0=1 (weight 3): sum=3, 11-3=8, checksum=8
+      // Try d0=0,d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=6: sum=12, 12%11=1, intermediate=10 → INVALID
+      expect(isValidKennitala('00000006-99')).toBe(false);
+      expect(isValidKennitala('00000006-09')).toBe(false);
+      // Any 10-digit with those first 8 digits should be rejected regardless of d8
+      expect(isValidKennitala('00000006-59')).toBe(false);
+    });
+
+    it('accepts kennitala where intermediate == 11 (checksum maps to 0)', () => {
+      // sum%11 == 0 → intermediate = 11 → checksum = 0
+      // d0..d7 all zero → sum=0, intermediate=11, checksum=0
+      // So 000000-0009 should be valid (d8=0)
+      expect(isValidKennitala('000000-0009')).toBe(true);
+      // And 000000-0109 should be invalid (d8=1)
+      expect(isValidKennitala('000000-0109')).toBe(false);
     });
 
     it('rejects wrong length', () => {
@@ -249,6 +298,9 @@ describe('Invoice computation', () => {
 
   describe('Full invoice structure', () => {
     it('produces a complete invoice with all mandatory fields', () => {
+      // 8900 is VAT-inclusive @ 24%
+      // excl = round(8900*100/124) = round(7177.42) = 7177
+      // vat = 8900 - 7177 = 1723
       const invoice = computeInvoice({
         items: [makeItem(8900, 1, 24)],
         currency: 'ISK',
@@ -284,15 +336,15 @@ describe('Invoice computation', () => {
       expect(invoice!.items[0].sku).toBe('TEST-001');
       expect(invoice!.items[0].description).toBe('Test Product');
       expect(invoice!.items[0].quantity).toBe(1);
-      expect(invoice!.items[0].unit_price_excl_vat).toBe(8900);
+      expect(invoice!.items[0].unit_price_excl_vat).toBe(7177);
       expect(invoice!.items[0].vat_rate).toBe(24);
 
-      // Summary
-      expect(invoice!.summary.subtotal_excl_vat).toBe(8900);
+      // Summary — total_incl_vat must equal charged amount
+      expect(invoice!.summary.subtotal_excl_vat).toBe(7177);
       expect(invoice!.summary.vat_breakdown).toEqual([
-        { rate: 24, taxable_base: 8900, vat_amount: 2136 },
+        { rate: 24, taxable_base: 7177, vat_amount: 1723 },
       ]);
-      expect(invoice!.summary.total_amount_incl_vat).toBe(11036); // 8900 + 2136
+      expect(invoice!.summary.total_amount_incl_vat).toBe(8900);
     });
 
     it('handles buyer without kennitala (B2C receipt)', () => {
@@ -306,6 +358,8 @@ describe('Invoice computation', () => {
       });
       expect(invoice).not.toBeNull();
       expect(invoice!.buyer.kennitala).toBeUndefined();
+      // total_incl = 5000 (charged amount)
+      expect(invoice!.summary.total_amount_incl_vat).toBe(5000);
     });
   });
 });

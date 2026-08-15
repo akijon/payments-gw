@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     delivery_date TEXT,                         -- YYYY-MM-DD (if different from issue)
     buyer_kennitala TEXT,                       -- Icelandic kennitala (XXXXXX-XXXX)
     status TEXT NOT NULL DEFAULT 'issued',      -- issued | void | corrected
+    payload_json TEXT,                          -- full computed invoice JSON (immutable after first issue)
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (order_id) REFERENCES orders(id),
     CHECK (status IN ('issued', 'void', 'corrected'))

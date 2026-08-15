@@ -30,22 +30,6 @@ export function roundToIsk(minorUnits: number): number {
   return Math.round(minorUnits / 100) * 100;
 }
 
-/**
- * For invoice line items, amounts are in minor units and must be integers.
- * VAT amount per line = round_half_up(unit_price_excl_vat * vat_rate / 100) * quantity
- * But since unit_price is already in aurar, we compute:
- *   vat_amount = round(unit_excl * rate / 100) — aurar-level precision, then × qty
- * Actually: line_vat = round(unit_excl * qty * rate / 100)
- * Icelandic standard: round each line independently to nearest aurar (integer minor units).
- * D1 stores integer minor units, so no fractional aurar exist.
- */
-function computeLineVat(unitPriceExclVat: number, quantity: number, vatRate: VatRate): number {
-  // unitPriceExclVat and quantity are integers; rate is 0/11/24
-  // vat_amount = trunc(unitPriceExclVat * quantity * vatRate / 100)
-  // Using Math.round for half-up rounding at aurar level
-  return Math.round((unitPriceExclVat * quantity * vatRate) / 100);
-}
-
 // ─── Kennitala validation ──────────────────────────────────────
 
 /**
@@ -69,8 +53,13 @@ export function isValidKennitala(kt: string): boolean {
   for (let i = 0; i < 8; i++) {
     sum += d[i] * weights[i];
   }
-  const checksum = (11 - (sum % 11)) % 10;
-  return checksum === d[8];
+  const intermediate = 11 - (sum % 11);
+  // If intermediate == 11, checksum is 0 (sum % 11 == 0 case).
+  // If intermediate == 10, no valid check digit exists — reject.
+  // Otherwise checksum = intermediate.
+  if (intermediate === 11) return d[8] === 0;
+  if (intermediate === 10) return false;
+  return d[8] === intermediate;
 }
 
 /**
@@ -99,6 +88,14 @@ export interface InvoiceComputationInput {
 
 /**
  * Compute line items with VAT breakdown and totals.
+ *
+ * Icelandic consumer prices are VAT-INCLUSIVE: the catalog `unit_price` is
+ * what the customer pays, and `order.amount = sum(unit_price * quantity)`
+ * is sent to Verifone. The invoice must decompose that inclusive price:
+ *   unit_price_excl_vat = round(unit_price_incl_vat * 100 / (100 + vat_rate))
+ *   vat_amount = unit_price_incl_vat - unit_price_excl_vat
+ *   total_incl_vat = unit_price_incl_vat * quantity  (= charged amount)
+ *
  * Returns null if items are empty or computation overflows.
  */
 export function computeInvoice(input: InvoiceComputationInput): Invoice | null {
@@ -109,24 +106,35 @@ export function computeInvoice(input: InvoiceComputationInput): Invoice | null {
   const vatBuckets = new Map<VatRate, VatBreakdownEntry>();
 
   for (const item of input.items) {
-    const vatAmount = computeLineVat(item.unit_price, item.quantity, item.vat_rate);
-    const totalInclVat = item.total_amount + vatAmount;
+    // item.unit_price and item.total_amount are VAT-inclusive (the charged price).
+    const unitPriceInclVat = item.unit_price;
+    const totalInclVat = item.total_amount; // already unit_price * quantity
 
-    if (!Number.isSafeInteger(totalInclVat) || !Number.isSafeInteger(subtotalExclVat + item.total_amount)) {
+    // Reverse VAT extraction: excl = round(incl * 100 / (100 + rate))
+    const unitPriceExclVat = Math.round((unitPriceInclVat * 100) / (100 + item.vat_rate));
+    const vatAmount = totalInclVat - unitPriceExclVat * item.quantity;
+
+    if (
+      !Number.isSafeInteger(unitPriceExclVat) ||
+      !Number.isSafeInteger(vatAmount) ||
+      !Number.isSafeInteger(totalInclVat) ||
+      !Number.isSafeInteger(subtotalExclVat + unitPriceExclVat * item.quantity)
+    ) {
       return null; // overflow guard
     }
 
-    subtotalExclVat += item.total_amount;
+    const lineExclVat = unitPriceExclVat * item.quantity;
+    subtotalExclVat += lineExclVat;
 
     // Aggregate into VAT bucket
     const bucket = vatBuckets.get(item.vat_rate);
     if (bucket) {
-      bucket.taxable_base += item.total_amount;
+      bucket.taxable_base += lineExclVat;
       bucket.vat_amount += vatAmount;
     } else {
       vatBuckets.set(item.vat_rate, {
         rate: item.vat_rate,
-        taxable_base: item.total_amount,
+        taxable_base: lineExclVat,
         vat_amount: vatAmount,
       });
     }
@@ -135,7 +143,7 @@ export function computeInvoice(input: InvoiceComputationInput): Invoice | null {
       sku: item.sku ?? item.product_id,
       description: item.name,
       quantity: item.quantity,
-      unit_price_excl_vat: item.unit_price,
+      unit_price_excl_vat: unitPriceExclVat,
       vat_rate: item.vat_rate,
       vat_amount: vatAmount,
       total_incl_vat: totalInclVat,
@@ -150,8 +158,15 @@ export function computeInvoice(input: InvoiceComputationInput): Invoice | null {
     totalVat += b.vat_amount;
   }
 
-  const totalInclVat = subtotalExclVat + totalVat;
-  if (!Number.isSafeInteger(totalInclVat)) return null;
+  const totalAmountInclVat = subtotalExclVat + totalVat;
+  if (!Number.isSafeInteger(totalAmountInclVat)) return null;
+
+  // Assert: invoice total must equal the sum of item totals (charged amount)
+  let sumItemTotals = 0;
+  for (const li of lineItems) {
+    sumItemTotals += li.total_incl_vat;
+  }
+  if (totalAmountInclVat !== sumItemTotals) return null;
 
   return {
     header: {
@@ -167,7 +182,7 @@ export function computeInvoice(input: InvoiceComputationInput): Invoice | null {
     summary: {
       subtotal_excl_vat: subtotalExclVat,
       vat_breakdown: vatBreakdown,
-      total_amount_incl_vat: totalInclVat,
+      total_amount_incl_vat: totalAmountInclVat,
     },
   };
 }

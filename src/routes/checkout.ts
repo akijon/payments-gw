@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types/env';
 import { enforceCheckoutRateLimit } from '../lib/rate-limit';
 import { acceptsJson, readTextBody, RequestBodyTooLargeError } from '../lib/http';
+import { isValidKennitala } from '../lib/invoice-computation';
 import { createCheckoutUseCase } from '../usecases/create-checkout';
 
 const MAX_CHECKOUT_BODY_BYTES = 16 * 1024;
@@ -118,6 +119,16 @@ checkoutRoute.post('/', async (c) => {
     const ktDigits = body.buyer_kennitala.replace(/\D/g, '');
     if (ktDigits.length !== 10 || !/^\d{10}$/.test(ktDigits)) {
       return c.json({ error: 'buyer_kennitala must be 10 digits', code: 'validation' }, 400);
+    }
+    // Validate the kennitala checksum before accepting payment — an invalid
+    // kennitala means the order can never get an invoice (the invoice endpoint
+    // returns 422). Reject early so the customer is never charged for an
+    // order that can't be invoiced.
+    if (!isValidKennitala(ktDigits)) {
+      return c.json(
+        { error: 'buyer_kennitala checksum is invalid', code: 'invalid_kennitala' },
+        422,
+      );
     }
     buyerKennitala = ktDigits;
   }

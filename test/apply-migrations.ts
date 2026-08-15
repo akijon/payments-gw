@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     delivery_date TEXT,
     buyer_kennitala TEXT,
     status TEXT NOT NULL DEFAULT 'issued',
+    payload_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (order_id) REFERENCES orders(id),
     CHECK (status IN ('issued', 'void', 'corrected'))

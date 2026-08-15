@@ -46,6 +46,7 @@ interface InvoiceRow {
   delivery_date: string | null;
   buyer_kennitala: string | null;
   status: string;
+  payload_json: string | null;
   created_at: string;
 }
 
@@ -59,6 +60,7 @@ function rowToRecord(row: InvoiceRow): InvoiceRecord {
     delivery_date: row.delivery_date,
     buyer_kennitala: row.buyer_kennitala,
     status: row.status as InvoiceRecord['status'],
+    payload_json: row.payload_json,
     created_at: row.created_at,
   };
 }
@@ -73,12 +75,15 @@ export async function createInvoiceRecord(
     dueDate: string | null;
     deliveryDate: string | null;
     buyerKennitala: string | null;
+    payloadJson: string;
   },
-): Promise<void> {
-  await db
+): Promise<{ inserted: boolean }> {
+  // INSERT OR IGNORE: if a record already exists for this order_id (concurrent
+  // requests), the insert is silently skipped and the caller must re-read.
+  const result = await db
     .prepare(
-      `INSERT INTO invoices (id, order_id, invoice_number, issue_date, due_date, delivery_date, buyer_kennitala, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'issued')`,
+      `INSERT OR IGNORE INTO invoices (id, order_id, invoice_number, issue_date, due_date, delivery_date, buyer_kennitala, status, payload_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?)`,
     )
     .bind(
       params.id,
@@ -88,8 +93,10 @@ export async function createInvoiceRecord(
       params.dueDate,
       params.deliveryDate,
       params.buyerKennitala,
+      params.payloadJson,
     )
     .run();
+  return { inserted: (result.meta.changes ?? 0) === 1 };
 }
 
 export async function getInvoiceByOrderId(db: D1Database, orderId: string): Promise<InvoiceRecord | null> {
