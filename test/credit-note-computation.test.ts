@@ -3,11 +3,7 @@
  * and amount negation (reversal of original invoice).
  */
 import { describe, it, expect } from 'vitest';
-import {
-  buildCreditNoteNumber,
-  parseCreditNoteNumber,
-  computeCreditNote,
-} from '../src/lib/invoice-computation';
+import { buildCreditNoteNumber, parseCreditNoteNumber, computeCreditNote } from '../src/lib/invoice-computation';
 import type { Invoice } from '../src/types/invoice';
 import type { SellerInfo, BuyerInfo } from '../src/types/invoice';
 
@@ -158,9 +154,7 @@ describe('Credit note computation', () => {
       const invoice = makeInvoice();
       const creditNote = computeCreditNote(invoice, 'KREDIT-2026-00001', '2026-08-16');
 
-      expect(creditNote!.summary.total_amount_incl_vat).toBe(
-        -invoice.summary.total_amount_incl_vat,
-      );
+      expect(creditNote!.summary.total_amount_incl_vat).toBe(-invoice.summary.total_amount_incl_vat);
     });
   });
 });

@@ -20,10 +20,7 @@ export { computeAuditHash, computeRetentionDate, RETENTION_YEARS };
  */
 export async function nextCreditNoteNumber(db: D1Database, year: number): Promise<number> {
   // Ensure the row exists
-  await db
-    .prepare('INSERT OR IGNORE INTO credit_note_sequence (year, next_number) VALUES (?, 1)')
-    .bind(year)
-    .run();
+  await db.prepare('INSERT OR IGNORE INTO credit_note_sequence (year, next_number) VALUES (?, 1)').bind(year).run();
 
   // Atomically read-and-increment using UPDATE ... RETURNING
   const row = await db
@@ -105,14 +102,8 @@ export async function createCreditNoteRecord(
   return { inserted: (result.meta.changes ?? 0) === 1 };
 }
 
-export async function getCreditNoteByOrderId(
-  db: D1Database,
-  orderId: string,
-): Promise<CreditNoteRecord | null> {
-  const row = await db
-    .prepare('SELECT * FROM credit_notes WHERE order_id = ?')
-    .bind(orderId)
-    .first<CreditNoteRow>();
+export async function getCreditNoteByOrderId(db: D1Database, orderId: string): Promise<CreditNoteRecord | null> {
+  const row = await db.prepare('SELECT * FROM credit_notes WHERE order_id = ?').bind(orderId).first<CreditNoteRow>();
   return row ? rowToRecord(row) : null;
 }
 

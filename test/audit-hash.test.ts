@@ -11,11 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import { createOrderWithAccessToken, generateOrderNumber, generateUUID } from '../src/lib/db';
-import {
-  computeAuditHash,
-  computeRetentionDate,
-  RETENTION_YEARS,
-} from '../src/lib/invoice-db';
+import { computeAuditHash, computeRetentionDate, RETENTION_YEARS } from '../src/lib/invoice-db';
 import type { LineItem } from '../src/types/api';
 
 vi.mock('../src/lib/verifone', () => ({
@@ -56,9 +52,7 @@ async function createPaidOrder(): Promise<{ orderId: string; token: string }> {
     items: makeTestItems(),
     accessToken: token,
   });
-  await env.DB.prepare("UPDATE orders SET status = 'paid', paid_at = datetime('now') WHERE id = ?")
-    .bind(orderId)
-    .run();
+  await env.DB.prepare("UPDATE orders SET status = 'paid', paid_at = datetime('now') WHERE id = ?").bind(orderId).run();
   return { orderId, token };
 }
 
@@ -153,8 +147,7 @@ describe('Invoice audit hash in D1', () => {
     const originalHash = row!.audit_hash;
 
     // Tamper with payload_json
-    await env.DB
-      .prepare("UPDATE invoices SET payload_json = '{\"tampered\":true}' WHERE order_id = ?")
+    await env.DB.prepare('UPDATE invoices SET payload_json = \'{"tampered":true}\' WHERE order_id = ?')
       .bind(orderId)
       .run();
 
@@ -183,9 +176,7 @@ describe('Credit note audit hash in D1', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     // Refund the order
-    await env.DB.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?")
-      .bind(orderId)
-      .run();
+    await env.DB.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").bind(orderId).run();
     // Issue credit note
     const response = await SELF.fetch(`http://localhost/api/invoices/orders/${orderId}/credit-note`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -204,9 +195,7 @@ describe('Credit note audit hash in D1', () => {
     await SELF.fetch(`http://localhost/api/invoices/orders/${orderId}/invoice`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    await env.DB.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?")
-      .bind(orderId)
-      .run();
+    await env.DB.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").bind(orderId).run();
     await SELF.fetch(`http://localhost/api/invoices/orders/${orderId}/credit-note`, {
       headers: { Authorization: `Bearer ${token}` },
     });

@@ -201,11 +201,9 @@ invoiceRoute.get('/orders/:id/credit-note', async (c) => {
 
   // Only refunded orders can produce a credit note
   if (order.status !== 'refunded') {
-    return c.json(
-      { error: 'Order is not refunded', code: 'not_refunded', order_status: order.status },
-      409,
-      { 'Cache-Control': 'no-store' },
-    );
+    return c.json({ error: 'Order is not refunded', code: 'not_refunded', order_status: order.status }, 409, {
+      'Cache-Control': 'no-store',
+    });
   }
 
   // Check if a credit note already exists
@@ -229,28 +227,22 @@ invoiceRoute.get('/orders/:id/credit-note', async (c) => {
   const invoiceRecord = await getInvoiceByOrderId(c.env.DB, orderId);
 
   if (!invoiceRecord || !invoiceRecord.payload_json) {
-    return c.json(
-      { error: 'No invoice found to credit', code: 'no_original_invoice' },
-      409,
-      { 'Cache-Control': 'no-store' },
-    );
+    return c.json({ error: 'No invoice found to credit', code: 'no_original_invoice' }, 409, {
+      'Cache-Control': 'no-store',
+    });
   }
 
   let originalInvoice: Invoice;
   try {
     originalInvoice = JSON.parse(invoiceRecord.payload_json) as Invoice;
   } catch {
-    return c.json(
-      { error: 'Original invoice payload is corrupt', code: 'corrupt_original' },
-      500,
-      { 'Cache-Control': 'no-store' },
-    );
+    return c.json({ error: 'Original invoice payload is corrupt', code: 'corrupt_original' }, 500, {
+      'Cache-Control': 'no-store',
+    });
   }
 
   // Claim credit note number atomically (separate sequence from invoices)
-  const { computeCreditNote, buildCreditNoteNumber } = await import(
-    '../lib/invoice-computation'
-  );
+  const { computeCreditNote, buildCreditNoteNumber } = await import('../lib/invoice-computation');
   const now = new Date();
   const year = now.getUTCFullYear();
   const seq = await nextCreditNoteNumber(c.env.DB, year);
@@ -260,11 +252,9 @@ invoiceRoute.get('/orders/:id/credit-note', async (c) => {
   const creditNote = computeCreditNote(originalInvoice, creditNoteNumber, issueDate);
 
   if (!creditNote) {
-    return c.json(
-      { error: 'Failed to compute credit note', code: 'computation_failed' },
-      500,
-      { 'Cache-Control': 'no-store' },
-    );
+    return c.json({ error: 'Failed to compute credit note', code: 'computation_failed' }, 500, {
+      'Cache-Control': 'no-store',
+    });
   }
 
   // Persist credit note record with the computed payload

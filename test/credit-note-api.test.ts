@@ -56,9 +56,7 @@ async function createPaidOrder(opts?: { kennitala?: string }): Promise<{ orderId
   });
 
   // Mark as paid
-  await env.DB.prepare("UPDATE orders SET status = 'paid', paid_at = datetime('now') WHERE id = ?")
-    .bind(orderId)
-    .run();
+  await env.DB.prepare("UPDATE orders SET status = 'paid', paid_at = datetime('now') WHERE id = ?").bind(orderId).run();
 
   return { orderId, token };
 }

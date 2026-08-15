@@ -236,11 +236,7 @@ export function parseCreditNoteNumber(creditNoteNumber: string): { year: number;
  *
  * Returns null if the original invoice is null or has no items.
  */
-export function computeCreditNote(
-  original: Invoice,
-  creditNoteNumber: string,
-  issueDate: string,
-): CreditNote | null {
+export function computeCreditNote(original: Invoice, creditNoteNumber: string, issueDate: string): CreditNote | null {
   if (!original || original.items.length === 0) return null;
 
   const items: InvoiceLineItem[] = original.items.map((item) => ({
