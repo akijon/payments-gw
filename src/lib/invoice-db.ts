@@ -54,6 +54,43 @@ export async function nextInvoiceNumber(db: D1Database, year: number): Promise<n
   return row.claimed;
 }
 
+/**
+ * Years whose invoice series has already been verified intact in this isolate.
+ *
+ * The integrity scan reads every invoice issued in the year, so running it per
+ * finalization would cost an O(n) D1 read per invoice. Verifying once per year
+ * on the claim path keeps the guarantee where it matters — no number is issued
+ * onto a broken ledger — without paying the scan on every sale.
+ */
+const verifiedSequenceYears = new Set<number>();
+
+/** Test seam: forces the next claim for a year to re-run the integrity scan. */
+export function resetSequenceVerificationCache(): void {
+  verifiedSequenceYears.clear();
+}
+
+/**
+ * Claim the next invoice number, refusing to issue onto a broken series.
+ *
+ * The integrity check runs BEFORE the increment: a rejected finalization must
+ * not consume a number, or the rejection would itself widen the gap it is
+ * refusing to append to.
+ *
+ * Only true out-of-order corruption rejects here. Transient lock/row contention
+ * is not corruption — it surfaces as a failed claim and is handled by the
+ * queue-and-retry path, so a paying customer is never told their purchase
+ * failed over a recoverable database race.
+ */
+export async function claimVerifiedInvoiceNumber(db: D1Database, year: number): Promise<number> {
+  if (!verifiedSequenceYears.has(year)) {
+    const { validateSequenceIntegrity, assertSequenceFinalizable } = await import('./sequence-management');
+    assertSequenceFinalizable(await validateSequenceIntegrity(db, 'invoice', year));
+    verifiedSequenceYears.add(year);
+  }
+
+  return nextInvoiceNumber(db, year);
+}
+
 /** Get the current next invoice number for a year (without claiming). */
 export async function peekInvoiceSequence(db: D1Database, year: number): Promise<number> {
   const row = await db

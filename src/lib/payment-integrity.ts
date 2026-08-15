@@ -18,6 +18,73 @@ export class PaymentIntegrityError extends Error {
   }
 }
 
+export type PricingIntegrityCode = 'pricing_mismatch' | 'pricing_malformed';
+
+/** Raised when the charged amount does not reconcile with the invoice arithmetic. */
+export class PricingIntegrityError extends Error {
+  constructor(
+    public readonly code: PricingIntegrityCode,
+    public readonly details: Record<string, unknown>,
+  ) {
+    super(code);
+    this.name = 'PricingIntegrityError';
+  }
+}
+
+export interface PricingComponents {
+  /** What the payment gateway actually charged, in minor units. */
+  chargedAmount: number;
+  subtotalExclVat: number;
+  totalVat: number;
+  /** Shipping is VAT-inclusive, matching the VAT-inclusive catalog pricing. */
+  shippingInclVat: number;
+}
+
+/**
+ * Fail closed unless the gateway charge strictly equals
+ * `subtotal_excl_vat + total_vat + shipping_incl_vat`.
+ *
+ * computeInvoice already asserts the invoice agrees with itself; this asserts
+ * the invoice agrees with the money actually taken from the customer. An
+ * invoice finalized for an amount the customer was never charged is the exact
+ * discrepancy a Skatturinn audit surfaces, so both directions (under- and
+ * overcharge) are blocked.
+ */
+export function assertPricingIntegrity(components: PricingComponents): void {
+  const { chargedAmount, subtotalExclVat, totalVat, shippingInclVat } = components;
+
+  const malformed =
+    !Number.isSafeInteger(chargedAmount) ||
+    !Number.isSafeInteger(subtotalExclVat) ||
+    !Number.isSafeInteger(totalVat) ||
+    !Number.isSafeInteger(shippingInclVat) ||
+    chargedAmount <= 0 ||
+    subtotalExclVat < 0 ||
+    totalVat < 0 ||
+    shippingInclVat < 0;
+
+  if (malformed) {
+    throw new PricingIntegrityError('pricing_malformed', {
+      charged_amount: chargedAmount,
+      subtotal_excl_vat: subtotalExclVat,
+      total_vat: totalVat,
+      shipping_incl_vat: shippingInclVat,
+    });
+  }
+
+  const computedTotal = subtotalExclVat + totalVat + shippingInclVat;
+  if (chargedAmount !== computedTotal) {
+    throw new PricingIntegrityError('pricing_mismatch', {
+      charged_amount: chargedAmount,
+      computed_total: computedTotal,
+      subtotal_excl_vat: subtotalExclVat,
+      total_vat: totalVat,
+      shipping_incl_vat: shippingInclVat,
+      difference: chargedAmount - computedTotal,
+    });
+  }
+}
+
 export interface ExpectedCheckout {
   checkoutId: string;
   amount: number;

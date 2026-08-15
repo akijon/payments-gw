@@ -47,7 +47,7 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
   }
 
   // Check if an invoice already exists
-  const { getInvoiceByOrderId, createInvoiceRecord, nextInvoiceNumber } = await import('../lib/invoice-db');
+  const { getInvoiceByOrderId, createInvoiceRecord, claimVerifiedInvoiceNumber } = await import('../lib/invoice-db');
   const existing = await getInvoiceByOrderId(c.env.DB, orderId);
 
   // ── Existing invoice: return the persisted payload ──────────────
@@ -93,19 +93,76 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
     email: order.customer_email,
   };
 
-  // Claim invoice number atomically
   const now = new Date();
   const year = now.getUTCFullYear();
-  const seq = await nextInvoiceNumber(c.env.DB, year);
-  const invoiceNumber = buildInvoiceNumber(year, seq);
   const issueDate = now.toISOString().slice(0, 10);
+  const vatItems = order.items.map((item) => ({
+    ...item,
+    vat_rate: (item as { vat_rate?: number }).vat_rate ?? 24,
+  })) as VatLineItem[];
 
-  // Compute full invoice payload
+  // Reconcile the charge BEFORE claiming a number: an order whose invoice
+  // arithmetic does not match the money taken must not consume a sequence
+  // number, or a blocked finalization would leave a permanent hole in the
+  // series it was refusing to misstate.
+  //
+  // The number is a placeholder here purely so the totals can be computed; the
+  // authoritative payload is recomputed below with the number actually claimed.
+  const draft = computeInvoice({
+    items: vatItems,
+    currency: order.currency,
+    seller,
+    buyer,
+    invoiceNumber: buildInvoiceNumber(year, 1),
+    issueDate,
+    dueDate: null,
+    deliveryDate: order.paid_at?.slice(0, 10) ?? issueDate,
+  });
+
+  if (!draft) {
+    return c.json({ error: 'Failed to compute invoice', code: 'computation_failed' }, 500, {
+      'Cache-Control': 'no-store',
+    });
+  }
+
+  const { assertPricingIntegrity, PricingIntegrityError } = await import('../lib/payment-integrity');
+  try {
+    assertPricingIntegrity({
+      chargedAmount: order.amount,
+      subtotalExclVat: draft.summary.subtotal_excl_vat,
+      totalVat: draft.summary.vat_breakdown.reduce((sum, entry) => sum + entry.vat_amount, 0),
+      shippingInclVat: order.shipping_incl_vat,
+    });
+  } catch (error) {
+    if (error instanceof PricingIntegrityError) {
+      return c.json({ error: 'Invoice does not reconcile with the charged amount', code: error.code, details: error.details }, 409, {
+        'Cache-Control': 'no-store',
+      });
+    }
+    throw error;
+  }
+
+  // Claim invoice number atomically.
+  // Refuse to append a number onto an already-broken series. A gap cannot be
+  // repaired by retrying, so this is a hard stop rather than a queued retry.
+  let seq: number;
+  try {
+    seq = await claimVerifiedInvoiceNumber(c.env.DB, year);
+  } catch (error) {
+    const { SequenceIntegrityError } = await import('../lib/sequence-management');
+    if (error instanceof SequenceIntegrityError) {
+      return c.json({ error: 'Invoice sequence integrity check failed', code: error.code, details: error.details }, 409, {
+        'Cache-Control': 'no-store',
+      });
+    }
+    throw error;
+  }
+  const invoiceNumber = buildInvoiceNumber(year, seq);
+
+  // Recompute with the claimed number — same inputs as the reconciled draft,
+  // so the totals verified above are the totals persisted here.
   const invoice = computeInvoice({
-    items: order.items.map((item) => ({
-      ...item,
-      vat_rate: (item as { vat_rate?: number }).vat_rate ?? 24,
-    })) as VatLineItem[],
+    items: vatItems,
     currency: order.currency,
     seller,
     buyer,
