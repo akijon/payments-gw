@@ -1,6 +1,6 @@
 /**
  * Standardized incident reporting for payment processing failures.
- * 
+ *
  * Provides structured observability for Skatturinn compliance audits,
  * idempotent incident tracking, and standardized recovery responses.
  */
@@ -9,7 +9,7 @@
 
 export type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL_BLOCKED';
 
-export type FailureType = 
+export type FailureType =
   | 'INVOICE_SEQUENCE_RACE_CONDITION'
   | 'VERIFONE_API_TIMEOUT'
   | 'LANDSBANKINN_API_TIMEOUT'
@@ -60,19 +60,19 @@ export interface SequenceFailureContext {
  */
 export function generateIncidentId(_failureType: FailureType): string {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const sequence = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  const sequence = Math.floor(Math.random() * 1000)
+    .toString()
+    .padStart(3, '0');
   return `INC-${date}-${sequence}`;
 }
 
 /**
  * Create standardized incident report for invoice sequence race conditions.
  */
-export function createSequenceRaceIncident(
-  context: SequenceFailureContext
-): IncidentReport {
+export function createSequenceRaceIncident(context: SequenceFailureContext): IncidentReport {
   const incidentId = generateIncidentId('INVOICE_SEQUENCE_RACE_CONDITION');
   const retryTime = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-  
+
   return {
     incident_id: incidentId,
     source_event: 'ORDER_PAYMENT_SETTLED',
@@ -90,7 +90,8 @@ export function createSequenceRaceIncident(
       reason_code: 'SKATTURINN_COMPLIANCE_LOCK_ACT_145_1994',
       detail: `Sequential invoice number generation encountered a concurrent write lock. Deferred emission to avoid gap in numbering series.`,
       customer_notified: true,
-      customer_message_is: 'Greiðsla hefur borist. Pöntun þín er móttekin og löglegur sölureikningur verður sendur í tölvupósti innan skamms.',
+      customer_message_is:
+        'Greiðsla hefur borist. Pöntun þín er móttekin og löglegur sölureikningur verður sendur í tölvupósti innan skamms.',
       sequence_details: {
         attempted_number: context.attemptedNumber,
         queue_position: context.queuePosition,
@@ -106,13 +107,13 @@ export function createSequenceRaceIncident(
  */
 export async function storeIncidentIdempotent(
   db: D1Database,
-  incident: IncidentReport
+  incident: IncidentReport,
 ): Promise<{ stored: boolean; existingId?: string }> {
   // Check for existing incident on same order + failure type
   const existing = await db
     .prepare(
       `SELECT incident_id FROM incidents 
-       WHERE order_id = ? AND failure_type = ? AND resolved_at_utc IS NULL`
+       WHERE order_id = ? AND failure_type = ? AND resolved_at_utc IS NULL`,
     )
     .bind(incident.order_id, incident.failure_type)
     .first<{ incident_id: string }>();
@@ -127,7 +128,7 @@ export async function storeIncidentIdempotent(
       `INSERT OR IGNORE INTO incidents 
        (incident_id, source_event, order_id, failure_type, severity, 
         action_taken_json, audit_trail_json, created_at_utc)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       incident.incident_id,
@@ -137,7 +138,7 @@ export async function storeIncidentIdempotent(
       incident.severity,
       JSON.stringify(incident.action_taken),
       JSON.stringify(incident.audit_trail),
-      incident.created_at_utc
+      incident.created_at_utc,
     )
     .run();
 
@@ -154,14 +155,14 @@ export async function resolveIncident(
     resolved_by: 'auto_retry' | 'manual_intervention' | 'system_recovery';
     resolution_detail: string;
     invoice_number?: string;
-  }
+  },
 ): Promise<boolean> {
   const result = await db
     .prepare(
       `UPDATE incidents 
        SET resolved_at_utc = datetime('now'), 
            resolution_json = ?
-       WHERE incident_id = ? AND resolved_at_utc IS NULL`
+       WHERE incident_id = ? AND resolved_at_utc IS NULL`,
     )
     .bind(JSON.stringify(resolution), incidentId)
     .run();
@@ -178,7 +179,7 @@ export async function getActiveIncidents(
     severity?: IncidentSeverity;
     failure_type?: FailureType;
     order_id?: string;
-  }
+  },
 ): Promise<IncidentReport[]> {
   let query = 'SELECT * FROM incidents WHERE resolved_at_utc IS NULL';
   const binds: string[] = [];
@@ -200,20 +201,23 @@ export async function getActiveIncidents(
 
   query += ' ORDER BY created_at_utc DESC';
 
-  const result = await db.prepare(query).bind(...binds).all<{
-    incident_id: string;
-    source_event: string;
-    order_id: string;
-    failure_type: FailureType;
-    severity: IncidentSeverity;
-    action_taken_json: string;
-    audit_trail_json: string;
-    created_at_utc: string;
-    resolved_at_utc: string | null;
-    resolution_json: string | null;
-  }>();
+  const result = await db
+    .prepare(query)
+    .bind(...binds)
+    .all<{
+      incident_id: string;
+      source_event: string;
+      order_id: string;
+      failure_type: FailureType;
+      severity: IncidentSeverity;
+      action_taken_json: string;
+      audit_trail_json: string;
+      created_at_utc: string;
+      resolved_at_utc: string | null;
+      resolution_json: string | null;
+    }>();
 
-  return result.results.map(row => ({
+  return result.results.map((row) => ({
     incident_id: row.incident_id,
     source_event: row.source_event,
     order_id: row.order_id,
@@ -236,7 +240,7 @@ export async function claimSequenceWithIncidentReporting(
     year: number;
     context: SequenceFailureContext;
     maxRetries?: number;
-  }
+  },
 ): Promise<{
   success: boolean;
   sequenceNumber?: number;
@@ -248,10 +252,7 @@ export async function claimSequenceWithIncidentReporting(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // Ensure year row exists
-      await db
-        .prepare(`INSERT OR IGNORE INTO ${tableName} (year, next_number) VALUES (?, 1)`)
-        .bind(year)
-        .run();
+      await db.prepare(`INSERT OR IGNORE INTO ${tableName} (year, next_number) VALUES (?, 1)`).bind(year).run();
 
       // Atomic sequence claim
       const claimed = await db
@@ -259,7 +260,7 @@ export async function claimSequenceWithIncidentReporting(
           `UPDATE ${tableName} 
            SET next_number = next_number + 1 
            WHERE year = ? 
-           RETURNING next_number - 1 AS sequence`
+           RETURNING next_number - 1 AS sequence`,
         )
         .bind(year)
         .first<{ sequence: number }>();
@@ -269,7 +270,7 @@ export async function claimSequenceWithIncidentReporting(
       }
     } catch (error) {
       console.error(`Sequence claim attempt ${attempt}/${maxRetries} failed:`, error);
-      
+
       if (attempt === maxRetries) {
         // Create incident report for final failure
         const incident = createSequenceRaceIncident({
@@ -285,7 +286,7 @@ export async function claimSequenceWithIncidentReporting(
       }
 
       // Exponential backoff
-      await new Promise(resolve => setTimeout(resolve, 50 * Math.pow(2, attempt - 1)));
+      await new Promise((resolve) => setTimeout(resolve, 50 * Math.pow(2, attempt - 1)));
     }
   }
 
