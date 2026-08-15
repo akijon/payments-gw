@@ -72,9 +72,7 @@ describe('Invoice computation', () => {
       // total_incl = charged amount (8065)
       expect(invoice!.items[0].total_incl_vat).toBe(8065);
       expect(invoice!.summary.subtotal_excl_vat).toBe(6504);
-      expect(invoice!.summary.vat_breakdown).toEqual([
-        { rate: 24, taxable_base: 6504, vat_amount: 1561 },
-      ]);
+      expect(invoice!.summary.vat_breakdown).toEqual([{ rate: 24, taxable_base: 6504, vat_amount: 1561 }]);
       // total must equal charged amount
       expect(invoice!.summary.total_amount_incl_vat).toBe(8065);
     });
@@ -120,10 +118,7 @@ describe('Invoice computation', () => {
 
     it('aggregates items with same VAT rate into one breakdown entry', () => {
       const invoice = computeInvoice({
-        items: [
-          makeItem(5000, 1, 24, 'Item A', 'SKU-A'),
-          makeItem(3000, 2, 24, 'Item B', 'SKU-B'),
-        ],
+        items: [makeItem(5000, 1, 24, 'Item A', 'SKU-A'), makeItem(3000, 2, 24, 'Item B', 'SKU-B')],
         currency: 'ISK',
         seller: SELLER,
         buyer: BUYER,
@@ -234,7 +229,7 @@ describe('Invoice computation', () => {
       // Find a kennitala with sum%11 == 1: digits 00000000X9
       // d0..d7 = 0,0,0,0,0,0,0,0 → sum=0, intermediate=11 → checksum=0
       // d0..d7 = 0,0,0,0,0,0,0,1 → sum=2, intermediate=9
-      // We need sum%11==1: d0=0,d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=? 
+      // We need sum%11==1: d0=0,d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=?
       // weight for d7 is 2, so d7*2 must give sum%11==1 → d7*2=1 mod 11 → no integer
       // Try d0=1 (weight 3): sum=3, 11-3=8, checksum=8
       // Try d0=0,d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=6: sum=12, 12%11=1, intermediate=10 → INVALID
@@ -341,9 +336,7 @@ describe('Invoice computation', () => {
 
       // Summary — total_incl_vat must equal charged amount
       expect(invoice!.summary.subtotal_excl_vat).toBe(7177);
-      expect(invoice!.summary.vat_breakdown).toEqual([
-        { rate: 24, taxable_base: 7177, vat_amount: 1723 },
-      ]);
+      expect(invoice!.summary.vat_breakdown).toEqual([{ rate: 24, taxable_base: 7177, vat_amount: 1723 }]);
       expect(invoice!.summary.total_amount_incl_vat).toBe(8900);
     });
 

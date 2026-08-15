@@ -41,17 +41,13 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
   // Only invoiceable statuses can produce an invoice
   const invoiceable = ['paid', 'settled', 'refunded'];
   if (!invoiceable.includes(order.status)) {
-    return c.json(
-      { error: 'Order is not invoiceable', code: 'not_invoiceable', order_status: order.status },
-      409,
-      { 'Cache-Control': 'no-store' },
-    );
+    return c.json({ error: 'Order is not invoiceable', code: 'not_invoiceable', order_status: order.status }, 409, {
+      'Cache-Control': 'no-store',
+    });
   }
 
   // Check if an invoice already exists
-  const { getInvoiceByOrderId, createInvoiceRecord, nextInvoiceNumber } = await import(
-    '../lib/invoice-db'
-  );
+  const { getInvoiceByOrderId, createInvoiceRecord, nextInvoiceNumber } = await import('../lib/invoice-db');
   const existing = await getInvoiceByOrderId(c.env.DB, orderId);
 
   // ── Existing invoice: return the persisted payload ──────────────
@@ -81,9 +77,8 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
   }
 
   // Validate buyer kennitala if provided (B2B requirement)
-  const { isValidKennitala, formatKennitala, computeInvoice, buildInvoiceNumber } = await import(
-    '../lib/invoice-computation'
-  );
+  const { isValidKennitala, formatKennitala, computeInvoice, buildInvoiceNumber } =
+    await import('../lib/invoice-computation');
   const buyerKennitala = order.buyer_kennitala;
   if (buyerKennitala && !isValidKennitala(buyerKennitala)) {
     return c.json({ error: 'Invalid buyer kennitala', code: 'invalid_kennitala' }, 422, {
@@ -182,9 +177,7 @@ async function recomputeInvoice(
   issueDate: string,
 ): Promise<Response> {
   const { getSellerInfo } = await import('../lib/seller');
-  const { isValidKennitala, formatKennitala, computeInvoice } = await import(
-    '../lib/invoice-computation'
-  );
+  const { isValidKennitala, formatKennitala, computeInvoice } = await import('../lib/invoice-computation');
 
   const seller = getSellerInfo(c.env);
   if (!seller) {

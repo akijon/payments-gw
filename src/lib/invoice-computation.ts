@@ -9,7 +9,15 @@
  * Legal basis: Lög um virðisaukaskatt nr. 50/1988, reglugerð nr. 505/2013.
  */
 
-import type { VatRate, Invoice, InvoiceLineItem, VatBreakdownEntry, SellerInfo, BuyerInfo, VatLineItem } from '../types/invoice';
+import type {
+  VatRate,
+  Invoice,
+  InvoiceLineItem,
+  VatBreakdownEntry,
+  SellerInfo,
+  BuyerInfo,
+  VatLineItem,
+} from '../types/invoice';
 
 // ─── VAT rates ──────────────────────────────────────────────────
 

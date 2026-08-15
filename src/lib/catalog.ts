@@ -88,7 +88,9 @@ export async function getProductsByIds(db: D1Database, productIds: string[]): Pr
 
   const placeholders = unique.map(() => '?').join(', ');
   const result = await db
-    .prepare(`SELECT id, name, description, unit_price, currency, active, vat_rate FROM products WHERE id IN (${placeholders})`)
+    .prepare(
+      `SELECT id, name, description, unit_price, currency, active, vat_rate FROM products WHERE id IN (${placeholders})`,
+    )
     .bind(...unique)
     .all<ProductRow>();
   for (const row of result.results) {

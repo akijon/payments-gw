@@ -11,14 +11,13 @@ import type { InvoiceRecord } from '../types/invoice';
  */
 export async function nextInvoiceNumber(db: D1Database, year: number): Promise<number> {
   // Ensure the row exists
-  await db
-    .prepare('INSERT OR IGNORE INTO invoice_sequence (year, next_number) VALUES (?, 1)')
-    .bind(year)
-    .run();
+  await db.prepare('INSERT OR IGNORE INTO invoice_sequence (year, next_number) VALUES (?, 1)').bind(year).run();
 
   // Atomically read-and-increment using UPDATE ... RETURNING
   const row = await db
-    .prepare('UPDATE invoice_sequence SET next_number = next_number + 1 WHERE year = ? RETURNING next_number - 1 AS claimed')
+    .prepare(
+      'UPDATE invoice_sequence SET next_number = next_number + 1 WHERE year = ? RETURNING next_number - 1 AS claimed',
+    )
     .bind(year)
     .first<{ claimed: number }>();
 
@@ -100,10 +99,7 @@ export async function createInvoiceRecord(
 }
 
 export async function getInvoiceByOrderId(db: D1Database, orderId: string): Promise<InvoiceRecord | null> {
-  const row = await db
-    .prepare('SELECT * FROM invoices WHERE order_id = ?')
-    .bind(orderId)
-    .first<InvoiceRow>();
+  const row = await db.prepare('SELECT * FROM invoices WHERE order_id = ?').bind(orderId).first<InvoiceRow>();
   return row ? rowToRecord(row) : null;
 }
 

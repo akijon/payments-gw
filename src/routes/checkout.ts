@@ -125,10 +125,7 @@ checkoutRoute.post('/', async (c) => {
     // returns 422). Reject early so the customer is never charged for an
     // order that can't be invoiced.
     if (!isValidKennitala(ktDigits)) {
-      return c.json(
-        { error: 'buyer_kennitala checksum is invalid', code: 'invalid_kennitala' },
-        422,
-      );
+      return c.json({ error: 'buyer_kennitala checksum is invalid', code: 'invalid_kennitala' }, 422);
     }
     buyerKennitala = ktDigits;
   }

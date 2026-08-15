@@ -33,27 +33,27 @@ export interface InvoiceLineItem {
   sku: string;
   description: string;
   quantity: number;
-  unit_price_excl_vat: number;  // minor units
+  unit_price_excl_vat: number; // minor units
   vat_rate: VatRate;
-  vat_amount: number;            // minor units
-  total_incl_vat: number;        // minor units
+  vat_amount: number; // minor units
+  total_incl_vat: number; // minor units
 }
 
 /** VAT breakdown by rate. */
 export interface VatBreakdownEntry {
   rate: VatRate;
-  taxable_base: number;          // minor units, excl. VAT
-  vat_amount: number;            // minor units
+  taxable_base: number; // minor units, excl. VAT
+  vat_amount: number; // minor units
 }
 
 /** Full invoice payload matching the JSON schema. */
 export interface Invoice {
   header: {
     invoice_number: string;
-    issue_date: string;           // YYYY-MM-DD
-    due_date: string | null;     // YYYY-MM-DD or null
+    issue_date: string; // YYYY-MM-DD
+    due_date: string | null; // YYYY-MM-DD or null
     delivery_date: string | null;
-    currency: string;            // ISO 4217
+    currency: string; // ISO 4217
   };
   seller: SellerInfo;
   buyer: BuyerInfo;
