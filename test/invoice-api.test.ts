@@ -102,7 +102,7 @@ describe('Invoice API endpoint', () => {
       { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(response.status).toBe(409);
-    const body = await response.json();
+    const body = await response.json() as any;
     expect(body.code).toBe('not_invoiceable');
   });
 
@@ -113,7 +113,7 @@ describe('Invoice API endpoint', () => {
       { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body = await response.json() as any;
     expect(body.invoice).toBeDefined();
     expect(body.invoice.header.invoice_number).toMatch(/^REIK-\d{4}-\d{5}$/);
     expect(body.invoice.seller.name).toBeDefined();
@@ -129,7 +129,7 @@ describe('Invoice API endpoint', () => {
       `http://localhost/api/invoices/orders/${orderId}/invoice`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    const body = await response.json();
+    const body = await response.json() as any;
     // The charged amount is 2000 (1000 * 2, VAT-inclusive)
     // The invoice total must equal this — no VAT added on top.
     expect(body.invoice.summary.total_amount_incl_vat).toBe(2000);
@@ -152,7 +152,7 @@ describe('Invoice API endpoint', () => {
       { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(response1.status).toBe(200);
-    const body1 = await response1.json();
+    const body1 = await response1.json() as any;
     const invoiceNumber = body1.invoice.header.invoice_number;
 
     // Second request returns the same invoice number (from persisted payload)
@@ -161,7 +161,7 @@ describe('Invoice API endpoint', () => {
       { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(response2.status).toBe(200);
-    const body2 = await response2.json();
+    const body2 = await response2.json() as any;
     expect(body2.invoice.header.invoice_number).toBe(invoiceNumber);
     // The full invoice payload must be identical (persisted, not recomputed)
     expect(body2.invoice).toEqual(body1.invoice);
@@ -175,7 +175,7 @@ describe('Invoice API endpoint', () => {
       `http://localhost/api/invoices/orders/${orderId}/invoice`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    const body1 = await response1.json();
+    const body1 = await response1.json() as any;
     const originalAddress = body1.invoice.seller.address;
 
     // Simulate a seller address change
@@ -187,7 +187,7 @@ describe('Invoice API endpoint', () => {
         `http://localhost/api/invoices/orders/${orderId}/invoice`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
-      const body2 = await response2.json();
+      const body2 = await response2.json() as any;
       // The address must NOT have changed — payload was persisted
       expect(body2.invoice.seller.address).toBe(originalAddress);
     } finally {
@@ -208,8 +208,8 @@ describe('Invoice API endpoint', () => {
       { headers: { Authorization: `Bearer ${token2}` } },
     );
 
-    const body1 = await r1.json();
-    const body2 = await r2.json();
+    const body1 = await r1.json() as any;
+    const body2 = await r2.json() as any;
 
     // Both should be same year, sequential sequence
     const num1 = body1.invoice.header.invoice_number;
@@ -249,7 +249,7 @@ describe('Invoice API endpoint', () => {
       `http://localhost/api/invoices/orders/${orderId}/invoice`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    const body = await response.json();
+    const body = await response.json() as any;
     expect(body.invoice.summary.vat_breakdown).toBeDefined();
     expect(body.invoice.summary.vat_breakdown).toHaveLength(1);
     expect(body.invoice.summary.vat_breakdown[0].rate).toBe(24);
@@ -299,7 +299,7 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       }),
     });
     expect(resp.status).toBe(422);
-    const body = await resp.json();
+    const body = await resp.json() as any;
     expect(body.code).toBe('invalid_kennitala');
 
     // No order should have been created
@@ -318,7 +318,7 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       }),
     });
     expect(resp.status).toBe(422);
-    expect((await resp.json()).code).toBe('invalid_kennitala');
+    expect(((await resp.json()) as any).code).toBe('invalid_kennitala');
   });
 
   it('still accepts checkout without a kennitala (B2C)', async () => {
