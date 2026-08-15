@@ -76,6 +76,8 @@ export interface InvoiceRecord {
   buyer_kennitala: string | null;
   status: 'issued' | 'void' | 'corrected';
   payload_json: string | null;
+  audit_hash: string | null;
+  retention_until: string | null;
   created_at: string;
 }
 
@@ -85,4 +87,41 @@ export interface InvoiceRecord {
  */
 export interface VatLineItem extends LineItem {
   vat_rate: VatRate;
+}
+
+/** Credit note record as stored in D1. */
+export interface CreditNoteRecord {
+  id: string;
+  order_id: string;
+  credit_note_number: string;
+  original_invoice_number: string;
+  issue_date: string;
+  buyer_kennitala: string | null;
+  status: 'issued' | 'void';
+  payload_json: string | null;
+  audit_hash: string | null;
+  retention_until: string | null;
+  created_at: string;
+}
+
+/**
+ * Full credit note payload — an Invoice with an `original_invoice_number`
+ * field in the header referencing the sölureikningur being reversed.
+ * All line item amounts are negated relative to the original invoice.
+ */
+export interface CreditNote {
+  header: {
+    credit_note_number: string;
+    original_invoice_number: string;
+    issue_date: string; // YYYY-MM-DD
+    currency: string; // ISO 4217
+  };
+  seller: SellerInfo;
+  buyer: BuyerInfo;
+  items: InvoiceLineItem[];
+  summary: {
+    subtotal_excl_vat: number; // negative
+    vat_breakdown: VatBreakdownEntry[]; // amounts negative
+    total_amount_incl_vat: number; // negative
+  };
 }
