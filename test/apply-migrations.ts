@@ -237,6 +237,84 @@ ALTER TABLE credit_notes ADD COLUMN audit_hash TEXT;
 ALTER TABLE credit_notes ADD COLUMN retention_until TEXT;
 `;
 
+const MIGRATION_0012_QUERIES = [
+  `DROP TRIGGER IF EXISTS validate_orders_before_insert;`,
+  `DROP TRIGGER IF EXISTS validate_orders_before_update;`,
+  `CREATE TRIGGER validate_orders_before_insert
+   BEFORE INSERT ON orders
+   WHEN NEW.status NOT IN ('pending', 'checkout_created', 'payment_pending', 'paid', 'failed', 'refunded', 'settled', 'PENDING_CUSTOMER_DATA', 'QUEUED_FOR_SEQUENCING', 'SETTLED_PENDING_INVOICE')
+     OR NEW.amount <= 0
+     OR length(NEW.currency) <> 3
+     OR NEW.currency NOT GLOB '[A-Z][A-Z][A-Z]'
+   BEGIN
+     SELECT RAISE(ABORT, 'invalid order state or monetary fields');
+   END;`,
+  `CREATE TRIGGER validate_orders_before_update
+   BEFORE UPDATE OF status, amount, currency ON orders
+   WHEN NEW.status NOT IN ('pending', 'checkout_created', 'payment_pending', 'paid', 'failed', 'refunded', 'settled', 'PENDING_CUSTOMER_DATA', 'QUEUED_FOR_SEQUENCING', 'SETTLED_PENDING_INVOICE')
+     OR NEW.amount <= 0
+     OR length(NEW.currency) <> 3
+     OR NEW.currency NOT GLOB '[A-Z][A-Z][A-Z]'
+   BEGIN
+     SELECT RAISE(ABORT, 'invalid order state or monetary fields');
+   END;`,
+  `CREATE TABLE IF NOT EXISTS dead_letter_events (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      original_payload TEXT NOT NULL,
+      error_message TEXT NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'queued',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id) REFERENCES orders(id)
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_dlq_status_created ON dead_letter_events(status, created_at);`,
+  `ALTER TABLE orders ADD COLUMN document_type TEXT DEFAULT 'sölureikningur';`,
+  `ALTER TABLE orders ADD COLUMN classification_reason TEXT;`,
+];
+
+// Copy of migrations/0013_incident_tracking.sql
+const MIGRATION_0013 = `
+CREATE TABLE IF NOT EXISTS incidents (
+    incident_id TEXT PRIMARY KEY,
+    source_event TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    failure_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    action_taken_json TEXT NOT NULL,
+    audit_trail_json TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at_utc TEXT,
+    resolution_json TEXT,
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL_BLOCKED')),
+    CHECK (failure_type IN (
+        'INVOICE_SEQUENCE_RACE_CONDITION',
+        'VERIFONE_API_TIMEOUT', 
+        'LANDSBANKINN_API_TIMEOUT',
+        'VAT_COMPUTATION_TIMEOUT',
+        'DLQ_OVERFLOW',
+        'AUDIT_HASH_CORRUPTION'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_order_id ON incidents(order_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_failure_type ON incidents(failure_type);
+CREATE INDEX IF NOT EXISTS idx_incidents_active ON incidents(resolved_at_utc) WHERE resolved_at_utc IS NULL;
+CREATE INDEX IF NOT EXISTS idx_incidents_created_at ON incidents(created_at_utc);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_active_unique 
+    ON incidents(order_id, failure_type) 
+    WHERE resolved_at_utc IS NULL;
+`;
+
+// Copy of migrations/0014_shipping_cost.sql
+const MIGRATION_0014 = `
+ALTER TABLE orders ADD COLUMN shipping_incl_vat INTEGER NOT NULL DEFAULT 0
+  CHECK (shipping_incl_vat >= 0);
+ALTER TABLE invoices ADD COLUMN shipping_incl_vat INTEGER NOT NULL DEFAULT 0
+  CHECK (shipping_incl_vat >= 0);
+`;
+
 function splitSql(sql: string): string[] {
   return sql
     .split(';')
@@ -258,6 +336,9 @@ beforeAll(async () => {
     { name: '0009_invoice_tables.sql', queries: splitSql(MIGRATION_0009) },
     { name: '0010_credit_notes.sql', queries: splitSql(MIGRATION_0010) },
     { name: '0011_audit_hash.sql', queries: splitSql(MIGRATION_0011) },
+    { name: '0012_failure_recovery_states.sql', queries: MIGRATION_0012_QUERIES },
+    { name: '0013_incident_tracking.sql', queries: splitSql(MIGRATION_0013) },
+    { name: '0014_shipping_cost.sql', queries: splitSql(MIGRATION_0014) },
   ];
   await applyD1Migrations(env.DB, migrations);
 });

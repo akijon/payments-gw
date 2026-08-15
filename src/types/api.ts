@@ -37,11 +37,13 @@ export interface Order {
   order_number: string;
   status: OrderStatus;
   currency: string;
-  amount: number; // minor units
+  amount: number; // minor units — the charged total, inclusive of shipping
   customer_email?: string;
   customer_name?: string;
   buyer_kennitala?: string; // Icelandic national ID — required for B2B invoices
   items: LineItem[];
+  /** Shipping charged with this order, VAT-inclusive minor units. */
+  shipping_incl_vat: number;
   payment_method?: PaymentMethod; // Determined from Verifone response after payment
   verifone_checkout_id?: string;
   verifone_transaction_id?: string;

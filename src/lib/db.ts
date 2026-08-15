@@ -162,6 +162,7 @@ interface OrderRow {
   customer_name: string | null;
   buyer_kennitala: string | null;
   items_json: string;
+  shipping_incl_vat: number | null;
   payment_method: string | null;
   verifone_checkout_id: string | null;
   verifone_transaction_id: string | null;
@@ -189,6 +190,9 @@ function rowToOrder(row: OrderRow): Order {
     customer_name: row.customer_name ?? undefined,
     buyer_kennitala: row.buyer_kennitala ?? undefined,
     items: JSON.parse(row.items_json),
+    // Predates migration 0014 on rows written before the column existed; those
+    // orders were placed when shipping was always zero.
+    shipping_incl_vat: row.shipping_incl_vat ?? 0,
     payment_method: storedPaymentMethod(row.payment_method),
     verifone_checkout_id: row.verifone_checkout_id ?? undefined,
     verifone_transaction_id: row.verifone_transaction_id ?? undefined,
