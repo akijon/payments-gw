@@ -16,6 +16,12 @@ VERIFONE_API_BASE = "https://cst.test-gsc.vfims.com/oidc/checkout-service"
 VERIFONE_OAUTH_URL = "https://cst1.test-vam.vfims.com/oauth2/realms/root/realms/VerifoneServices/access_token"
 LANDSBANKINN_API_BASE = "https://apisandbox.landsbankinn.is/api/Acquiring/Acquiring/v1"
 LANDSBANKINN_OAUTH_URL = "https://apisandbox.landsbankinn.is/oauth2/access_token"
+# ─── Seller identity (legally required on Icelandic invoices) ──
+SELLER_NAME = "IRJA ehf."
+SELLER_KENNITALA = "461200-2650"
+SELLER_VSK_NUMBER = "4612"
+SELLER_ADDRESS = "Bollagata 14, 105 Reykjavík"
+SELLER_EMAIL = "irja@irja.is"
 
 # ─── D1 Database Binding ─────────────────────────────────────────
 [[d1_databases]]
