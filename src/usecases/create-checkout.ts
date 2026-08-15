@@ -47,17 +47,19 @@ export type CreateCheckoutOutcome =
 export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput): Promise<CreateCheckoutOutcome> {
   const {
     claimCheckoutAttempt,
-    completeCheckoutAttempt,
     createOrderWithAccessToken,
     deriveOrderAccessToken,
     failCheckoutAttempt,
+    failCheckoutCreationAtomically,
+    finalizeCheckoutCreationAtomically,
     generateUUID,
     generateOrderNumber,
+    getCheckoutAttempt,
+    getCheckoutProviderResult,
     getOrderById,
     hashIdempotencyValue,
     reclaimStaleCheckoutAttempt,
-    recordCheckoutUrl,
-    updateOrderStatus,
+    recordCheckoutProviderResult,
     logPaymentEvent,
   } = await import('../lib/db');
 
@@ -103,10 +105,45 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       };
     }
 
-    // No checkout_url yet: either genuinely in flight, previously failed, or the
-    // Worker died before a provider session could have been created (checkout_url
-    // is written immediately once one exists — see recordCheckoutUrl). In the last
-    // case it is safe to reclaim the row and retry as a fresh claim.
+    if (claim.attempt.status === 'processing') {
+      const providerResult = await getCheckoutProviderResult(env.DB, claim.attempt.order_id);
+      if (providerResult) {
+        const recovered = await finalizeCheckoutCreationAtomically(env.DB, {
+          keyHash,
+          orderId: claim.attempt.order_id,
+          checkoutId: providerResult.checkoutId,
+          checkoutUrl: providerResult.checkoutUrl,
+          providerResultEventId: providerResult.eventId,
+        });
+        const currentAttempt = recovered ? null : await getCheckoutAttempt(env.DB, keyHash);
+        const checkoutUrl = recovered ? providerResult.checkoutUrl : currentAttempt?.checkout_url;
+        if (!recovered && (currentAttempt?.status !== 'completed' || !checkoutUrl)) {
+          throw new Error('Stored provider checkout could not be finalized');
+        }
+
+        const existingOrder = await getOrderById(env.DB, claim.attempt.order_id);
+        if (!existingOrder) throw new Error('Recovered checkout attempt has no order');
+        return {
+          status: 200,
+          body: {
+            checkout_url: checkoutUrl!,
+            order_id: existingOrder.id,
+            order_number: existingOrder.order_number,
+            amount: existingOrder.amount,
+            currency: existingOrder.currency,
+            total_amount: existingOrder.amount,
+            order_status_token: await deriveOrderAccessToken(input.idempotencyKey, existingOrder.id),
+            idempotent_replay: true,
+          },
+        };
+      }
+    }
+
+    // No checkout_url or recoverable provider result yet: either genuinely in
+    // flight, previously failed, or the provider result was never committed
+    // locally. The lease prevents a permanent key wedge, but provider
+    // idempotency/reconciliation is still required because an accepted provider
+    // request can exist without a locally stored result.
     const reclaim = await reclaimStaleCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
     if (!reclaim.reclaimed) {
       return {
@@ -168,16 +205,16 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       email: input.customerEmail,
       ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
       ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
-    }).catch((error) => {
+    }).catch(async (error) => {
       console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
-      logPaymentEvent(env.DB, {
+      await logPaymentEvent(env.DB, {
         id: generateUUID(),
         orderId,
         eventType: 'customer_creation_failed',
         source: 'verifone_api',
         rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
         verified: false,
-      }).catch(() => {});
+      });
     });
     input.executionCtx.waitUntil(customerPromise);
   }
@@ -192,51 +229,54 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     });
   } catch (error) {
     console.error(JSON.stringify({ message: 'Verifone checkout creation failed', order_id: orderId }));
-    await updateOrderStatus(env.DB, orderId, 'failed', { allowedFrom: ['pending'] });
-    await failCheckoutAttempt(env.DB, keyHash);
-    await logPaymentEvent(env.DB, {
-      id: generateUUID(),
+    const failed = await failCheckoutCreationAtomically(env.DB, {
+      keyHash,
       orderId,
-      eventType: 'checkout_creation_failed',
-      source: 'verifone_api',
+      eventId: generateUUID(),
       rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
-      verified: false,
     });
+    if (!failed) throw new Error('Checkout order changed before provider failure persistence');
     return {
       status: 502,
       body: { error: 'Failed to create checkout session', code: 'checkout_provider_unavailable' },
     };
   }
 
-  // Persist the provider URL immediately, before any other write, so a crash from
-  // here on always leaves a checkout_url behind — the reclaim path above only ever
-  // touches attempts where checkout_url is still null.
-  await recordCheckoutUrl(env.DB, keyHash, checkoutResult.checkoutUrl);
-
-  const applied = await updateOrderStatus(env.DB, orderId, 'checkout_created', {
-    verifoneCheckoutId: checkoutResult.checkoutId,
-    allowedFrom: ['pending'],
+  const providerResultEventId = generateUUID();
+  const providerResultPayload = JSON.stringify({
+    checkoutId: checkoutResult.checkoutId,
+    checkoutUrl: checkoutResult.checkoutUrl,
+    amount: totalAmount,
+    currency,
+    item_count: items.length,
   });
-  if (!applied) {
-    await failCheckoutAttempt(env.DB, keyHash);
-    throw new Error('Checkout order changed before session persistence');
-  }
-
-  await logPaymentEvent(env.DB, {
-    id: generateUUID(),
+  await recordCheckoutProviderResult(env.DB, {
+    eventId: providerResultEventId,
     orderId,
-    eventType: 'checkout_created',
-    source: 'verifone_api',
-    verifoneEventId: checkoutResult.checkoutId,
-    rawPayload: JSON.stringify({
-      checkoutId: checkoutResult.checkoutId,
-      amount: totalAmount,
-      currency,
-      item_count: items.length,
-    }),
-    verified: true,
+    checkoutId: checkoutResult.checkoutId,
+    checkoutUrl: checkoutResult.checkoutUrl,
+    rawPayload: providerResultPayload,
   });
-  await completeCheckoutAttempt(env.DB, keyHash, checkoutResult.checkoutUrl);
+
+  const finalized = await finalizeCheckoutCreationAtomically(env.DB, {
+    keyHash,
+    orderId,
+    checkoutId: checkoutResult.checkoutId,
+    checkoutUrl: checkoutResult.checkoutUrl,
+    providerResultEventId,
+  });
+  if (!finalized) {
+    const [currentAttempt, currentOrder] = await Promise.all([
+      getCheckoutAttempt(env.DB, keyHash),
+      getOrderById(env.DB, orderId),
+    ]);
+    const finalizedByRetry =
+      currentAttempt?.status === 'completed' &&
+      currentAttempt.checkout_url === checkoutResult.checkoutUrl &&
+      currentOrder?.status === 'checkout_created' &&
+      currentOrder.verifone_checkout_id === checkoutResult.checkoutId;
+    if (!finalizedByRetry) throw new Error('Checkout order changed before session persistence');
+  }
 
   return {
     status: 200,

@@ -309,6 +309,115 @@ describe('POST /api/checkout', () => {
     expect(retry.headers.get('Retry-After')).toBe('2');
   });
 
+  it('recovers a persisted provider result after finalization rollback without creating a second HPP session', async () => {
+    const idempotencyKey = 'checkout-finalization-recovery-0001';
+    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] });
+    const conflictingOrderId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    await env.DB.prepare(
+      `INSERT INTO orders (
+         id, order_number, status, currency, amount, items_json, verifone_checkout_id
+       ) VALUES (?, 'IRJA-20260815-CONFLICT', 'checkout_created', 'ISK', 1000, '[]', 'chk-recovery-1')`,
+    )
+      .bind(conflictingOrderId)
+      .run();
+
+    const { createCheckout } = await import('../src/lib/verifone');
+    vi.mocked(createCheckout).mockResolvedValueOnce({
+      checkoutId: 'chk-recovery-1',
+      checkoutUrl: 'https://pay.mock.verifone/chk-recovery-1',
+    });
+
+    const first = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(first.status).toBe(500);
+
+    const originalAttempt = await env.DB.prepare(
+      'SELECT order_id, status, checkout_url FROM checkout_attempts WHERE request_hash IS NOT NULL AND order_id != ?',
+    )
+      .bind(conflictingOrderId)
+      .first<{ order_id: string; status: string; checkout_url: string | null }>();
+    expect(originalAttempt).toMatchObject({ status: 'processing', checkout_url: null });
+
+    await env.DB.prepare('UPDATE orders SET verifone_checkout_id = NULL WHERE id = ?').bind(conflictingOrderId).run();
+    await env.DB.prepare("UPDATE checkout_attempts SET updated_at = '2000-01-01 00:00:00' WHERE order_id = ?")
+      .bind(originalAttempt!.order_id)
+      .run();
+
+    const retry = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(retry.status).toBe(200);
+    const retryBody = (await retry.json()) as { order_id: string; checkout_url: string; idempotent_replay: boolean };
+    expect(retryBody).toMatchObject({
+      order_id: originalAttempt!.order_id,
+      checkout_url: 'https://pay.mock.verifone/chk-recovery-1',
+      idempotent_replay: true,
+    });
+    expect(vi.mocked(createCheckout)).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the finalized checkout when a same-key retry wins the finalization race', async () => {
+    const idempotencyKey = 'checkout-finalization-race-0001';
+    const checkoutInput = {
+      idempotencyKey,
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      publicApiOrigin: 'https://test.example.com',
+    };
+    const db = await import('../src/lib/db');
+    const recordProviderResult = db.recordCheckoutProviderResult;
+    let signalRecorded!: () => void;
+    let releaseOriginal!: () => void;
+    const recorded = new Promise<void>((resolve) => {
+      signalRecorded = resolve;
+    });
+    const originalMayContinue = new Promise<void>((resolve) => {
+      releaseOriginal = resolve;
+    });
+    const recordSpy = vi.spyOn(db, 'recordCheckoutProviderResult').mockImplementationOnce(async (...args) => {
+      await recordProviderResult(...args);
+      signalRecorded();
+      await originalMayContinue;
+    });
+    const { createCheckout } = await import('../src/lib/verifone');
+    vi.mocked(createCheckout).mockResolvedValueOnce({
+      checkoutId: 'chk-race-1',
+      checkoutUrl: 'https://pay.mock.verifone/chk-race-1',
+    });
+
+    const { createCheckoutUseCase } = await import('../src/usecases/create-checkout');
+
+    try {
+      const originalOutcomePromise = createCheckoutUseCase(env, checkoutInput);
+      await recorded;
+
+      const retry = await createCheckoutUseCase(env, checkoutInput);
+      expect(retry.status).toBe(200);
+      if (retry.status !== 200) throw new Error('Retry did not recover checkout');
+
+      releaseOriginal();
+      const original = await originalOutcomePromise;
+      expect(original.status).toBe(200);
+      if (original.status !== 200) throw new Error('Original request did not observe completed checkout');
+      expect(original.body).toMatchObject({
+        order_id: retry.body.order_id,
+        checkout_url: retry.body.checkout_url,
+      });
+      const storedOrder = await env.DB.prepare('SELECT id, verifone_checkout_id FROM orders WHERE id = ?')
+        .bind(retry.body.order_id)
+        .first<{ id: string; verifone_checkout_id: string | null }>();
+      expect(storedOrder).toEqual({ id: retry.body.order_id, verifone_checkout_id: 'chk-race-1' });
+      expect(vi.mocked(createCheckout)).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseOriginal();
+      recordSpy.mockRestore();
+    }
+  });
+
   it('reclaims a stale idempotency attempt that never got a provider checkout_url', async () => {
     // A Worker that dies before persisting checkout_url must not wedge the key
     // forever — once the lease window has passed, a retry should succeed fresh.
@@ -378,6 +487,36 @@ describe('POST /api/checkout', () => {
     expect(resp.status).toBe(200);
     const { createCustomer } = await import('../src/lib/verifone');
     expect(vi.mocked(createCustomer)).not.toHaveBeenCalled();
+  });
+
+  it('tracks customer-creation failure auditing in the waitUntil promise', async () => {
+    const { createCustomer } = await import('../src/lib/verifone');
+    vi.mocked(createCustomer).mockRejectedValueOnce(new Error('customer-service down'));
+    const db = await import('../src/lib/db');
+    const logSpy = vi.spyOn(db, 'logPaymentEvent').mockRejectedValueOnce(new Error('audit-write down'));
+    let backgroundWork: Promise<unknown> | undefined;
+    const waitUntil = vi.fn((promise: Promise<unknown>) => {
+      backgroundWork = promise;
+      void promise.catch(() => {});
+    });
+    const { createCheckoutUseCase } = await import('../src/usecases/create-checkout');
+
+    try {
+      const outcome = await createCheckoutUseCase(env, {
+        idempotencyKey: crypto.randomUUID(),
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        customerEmail: 'buyer@example.com',
+        publicApiOrigin: 'https://test.example.com',
+        executionCtx: { waitUntil },
+      });
+
+      expect(outcome.status).toBe(200);
+      expect(waitUntil).toHaveBeenCalledOnce();
+      expect(backgroundWork).toBeDefined();
+      await expect(backgroundWork).rejects.toThrow('audit-write down');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('proceeds with checkout even if customer creation fails (best-effort async)', async () => {

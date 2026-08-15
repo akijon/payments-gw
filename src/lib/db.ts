@@ -303,36 +303,166 @@ export async function claimCheckoutAttempt(
   return { claimed: (result.meta.changes ?? 0) === 1, attempt };
 }
 
-/** Persist the provider checkout URL as soon as it exists, before any further writes,
- *  so a crash after this point never leaves an in-flight attempt indistinguishable
- *  from one where no provider session was created yet. */
-export async function recordCheckoutUrl(db: D1Database, keyHash: string, checkoutUrl: string): Promise<void> {
+export interface CheckoutProviderResult {
+  eventId: string;
+  orderId: string;
+  checkoutId: string;
+  checkoutUrl: string;
+}
+
+/** Persist the provider result before local finalization so retries can recover it. */
+export async function recordCheckoutProviderResult(
+  db: D1Database,
+  input: CheckoutProviderResult & { rawPayload: string },
+): Promise<void> {
   await db
     .prepare(
-      `UPDATE checkout_attempts SET checkout_url = ?, updated_at = datetime('now')
-     WHERE key_hash = ? AND status = 'processing'`,
+      `INSERT INTO payment_events (
+         id, order_id, event_type, source, verifone_event_id, raw_payload, verified
+       ) VALUES (?, ?, 'checkout_provider_result', 'verifone_api', ?, ?, 1)`,
     )
-    .bind(checkoutUrl, keyHash)
+    .bind(input.eventId, input.orderId, input.checkoutId, input.rawPayload)
     .run();
 }
 
-export async function completeCheckoutAttempt(db: D1Database, keyHash: string, checkoutUrl: string): Promise<void> {
-  await db
+export async function getCheckoutProviderResult(
+  db: D1Database,
+  orderId: string,
+): Promise<CheckoutProviderResult | null> {
+  const row = await db
     .prepare(
-      `UPDATE checkout_attempts
-     SET status = 'completed', checkout_url = ?, updated_at = datetime('now')
-     WHERE key_hash = ? AND status = 'processing'`,
+      `SELECT id, order_id, verifone_event_id, raw_payload
+       FROM payment_events
+       WHERE order_id = ? AND event_type = 'checkout_provider_result'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
     )
-    .bind(checkoutUrl, keyHash)
-    .run();
+    .bind(orderId)
+    .first<{ id: string; order_id: string; verifone_event_id: string | null; raw_payload: string | null }>();
+  if (!row?.verifone_event_id || !row.raw_payload) return null;
+
+  const payload = JSON.parse(row.raw_payload) as { checkoutUrl?: unknown };
+  if (typeof payload.checkoutUrl !== 'string') throw new Error('Stored checkout provider result is malformed');
+  return {
+    eventId: row.id,
+    orderId: row.order_id,
+    checkoutId: row.verifone_event_id,
+    checkoutUrl: payload.checkoutUrl,
+  };
+}
+
+export async function getCheckoutAttempt(db: D1Database, keyHash: string): Promise<CheckoutAttempt | null> {
+  const attempt = await db
+    .prepare(
+      `SELECT key_hash, request_hash, order_id, status, checkout_url
+       FROM checkout_attempts WHERE key_hash = ?`,
+    )
+    .bind(keyHash)
+    .first<CheckoutAttempt>();
+  return attempt ?? null;
+}
+
+export interface AtomicCheckoutCreation {
+  keyHash: string;
+  orderId: string;
+  checkoutId: string;
+  checkoutUrl: string;
+  providerResultEventId: string;
+}
+
+/** Commit the provider URL, order mapping, checkout attempt, and recovery event together. */
+export async function finalizeCheckoutCreationAtomically(
+  db: D1Database,
+  input: AtomicCheckoutCreation,
+): Promise<boolean> {
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE checkout_attempts
+         SET status = 'completed', checkout_url = ?, updated_at = datetime('now')
+         WHERE key_hash = ? AND order_id = ? AND status = 'processing'
+           AND EXISTS (SELECT 1 FROM orders WHERE id = ? AND status = 'pending')
+           AND EXISTS (
+             SELECT 1 FROM payment_events
+             WHERE id = ? AND order_id = ? AND event_type = 'checkout_provider_result'
+               AND verifone_event_id = ?
+           )`,
+      )
+      .bind(
+        input.checkoutUrl,
+        input.keyHash,
+        input.orderId,
+        input.orderId,
+        input.providerResultEventId,
+        input.orderId,
+        input.checkoutId,
+      ),
+    db
+      .prepare(
+        `UPDATE orders
+         SET status = 'checkout_created', verifone_checkout_id = ?, updated_at = datetime('now')
+         WHERE id = ? AND status = 'pending' AND (SELECT changes()) = 1`,
+      )
+      .bind(input.checkoutId, input.orderId),
+    db
+      .prepare(
+        `UPDATE payment_events
+         SET event_type = 'checkout_created'
+         WHERE id = ? AND order_id = ? AND event_type = 'checkout_provider_result'
+           AND verifone_event_id = ? AND (SELECT changes()) = 1`,
+      )
+      .bind(input.providerResultEventId, input.orderId, input.checkoutId),
+  ]);
+
+  return results.every((result) => (result.meta.changes ?? 0) === 1);
+}
+
+export interface AtomicCheckoutCreationFailure {
+  keyHash: string;
+  orderId: string;
+  eventId: string;
+  rawPayload: string;
+}
+
+/** Commit provider-creation failure state and its audit event together. */
+export async function failCheckoutCreationAtomically(
+  db: D1Database,
+  input: AtomicCheckoutCreationFailure,
+): Promise<boolean> {
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE checkout_attempts
+         SET status = 'failed', updated_at = datetime('now')
+         WHERE key_hash = ? AND order_id = ? AND status = 'processing'
+           AND EXISTS (SELECT 1 FROM orders WHERE id = ? AND status = 'pending')`,
+      )
+      .bind(input.keyHash, input.orderId, input.orderId),
+    db
+      .prepare(
+        `UPDATE orders
+         SET status = 'failed', updated_at = datetime('now')
+         WHERE id = ? AND status = 'pending' AND (SELECT changes()) = 1`,
+      )
+      .bind(input.orderId),
+    db
+      .prepare(
+        `INSERT INTO payment_events (id, order_id, event_type, source, raw_payload, verified)
+         SELECT ?, ?, 'checkout_creation_failed', 'verifone_api', ?, 0
+         WHERE changes() = 1`,
+      )
+      .bind(input.eventId, input.orderId, input.rawPayload),
+  ]);
+
+  return results.every((result) => (result.meta.changes ?? 0) === 1);
 }
 
 const STALE_CHECKOUT_ATTEMPT_SECONDS = 45;
 
-/** Reclaim a 'processing' attempt that never got a checkout_url within the lease
- *  window — i.e. the Worker died before any provider session could have been created,
- *  so it is safe to let the caller retry as a fresh claim. Attempts that already have
- *  a checkout_url are never reclaimed, since a provider session may exist for them. */
+/** Reclaim a 'processing' attempt whose provider result was never durably recorded.
+ *  The elapsed lease prevents permanent key wedging, but does not prove that the
+ *  provider rejected the original request; provider idempotency or reconciliation
+ *  is still required to eliminate duplicate-session risk. */
 export async function reclaimStaleCheckoutAttempt(
   db: D1Database,
   input: { keyHash: string; requestHash: string; orderId: string },
@@ -342,7 +472,12 @@ export async function reclaimStaleCheckoutAttempt(
       `UPDATE checkout_attempts
      SET request_hash = ?, order_id = ?, status = 'processing', checkout_url = NULL, updated_at = datetime('now')
      WHERE key_hash = ? AND status = 'processing' AND checkout_url IS NULL
-       AND updated_at < datetime('now', '-' || ? || ' seconds')`,
+       AND updated_at < datetime('now', '-' || ? || ' seconds')
+       AND NOT EXISTS (
+         SELECT 1 FROM payment_events
+         WHERE payment_events.order_id = checkout_attempts.order_id
+           AND payment_events.event_type = 'checkout_provider_result'
+       )`,
     )
     .bind(input.requestHash, input.orderId, input.keyHash, STALE_CHECKOUT_ATTEMPT_SECONDS)
     .run();
