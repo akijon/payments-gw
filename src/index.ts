@@ -19,6 +19,7 @@ import { checkoutRoute } from './routes/checkout';
 import { returnRoute } from './routes/return';
 import { webhookRoute } from './routes/webhook';
 import { orderRoute } from './routes/order';
+import { invoiceRoute } from './routes/invoice';
 import { reconcile } from './cron/reconcile';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -52,6 +53,17 @@ app.use('/api/checkout/*', async (c, next) => {
 });
 
 app.use('/api/orders/*', async (c, next) => {
+  const origin = c.env.STOREFRONT_URL;
+  const middleware = cors({
+    origin,
+    allowMethods: ['GET', 'OPTIONS'],
+    allowHeaders: ['Authorization'],
+    maxAge: 86400,
+  });
+  return middleware(c, next);
+});
+
+app.use('/api/invoices/*', async (c, next) => {
   const origin = c.env.STOREFRONT_URL;
   const middleware = cors({
     origin,
@@ -102,6 +114,7 @@ app.route('/api/checkout', checkoutRoute);
 app.route('/api/return', returnRoute);
 app.route('/api/webhooks/verifone', webhookRoute);
 app.route('/api/orders', orderRoute);
+app.route('/api/invoices', invoiceRoute);
 
 // ─── 404 handler ─────────────────────────────────────────────────
 app.notFound((c) => {

@@ -56,10 +56,7 @@ export function classifyKeyHonored(r1: ProbeResponse, r2: ProbeResponse): KeyBeh
  * Same ID => original returned (amount silently ignored).
  * Different ID => new checkout (key not scoped to body — dangerous).
  */
-export function classifyKeyScope(
-  response: ProbeResponse,
-  originalId: string,
-): KeyScopeBehavior {
+export function classifyKeyScope(response: ProbeResponse, originalId: string): KeyScopeBehavior {
   if (response.status >= 400 && response.status < 500) {
     return 'conflict_rejected';
   }
@@ -76,10 +73,7 @@ export function classifyKeyScope(
  * so that a new checkout can only mean the key expired, not that the body
  * mismatched.
  */
-export function classifyRetention(
-  replay: ProbeResponse,
-  originalId: string,
-): RetentionResult {
+export function classifyRetention(replay: ProbeResponse, originalId: string): RetentionResult {
   if (replay.checkoutId === '-') {
     return 'inconclusive';
   }

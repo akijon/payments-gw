@@ -40,6 +40,7 @@ export interface Order {
   amount: number; // minor units
   customer_email?: string;
   customer_name?: string;
+  buyer_kennitala?: string; // Icelandic national ID — required for B2B invoices
   items: LineItem[];
   payment_method?: PaymentMethod; // Determined from Verifone response after payment
   verifone_checkout_id?: string;

@@ -12,6 +12,12 @@ VERIFONE_API_BASE = "https://api.test.verifone/checkout-service"
 VERIFONE_OAUTH_URL = "https://oauth.test.verifone/access_token"
 LANDSBANKINN_API_BASE = "https://api.test.landsbankinn.is/acquiring/v1"
 LANDSBANKINN_OAUTH_URL = "https://oauth.test.landsbankinn.is/access_token"
+SELLER_NAME = "Irja ehf."
+SELLER_KENNITALA = "570915-1422"
+SELLER_VSK_NUMBER = "570915"
+SELLER_ADDRESS = "Laugavegur 1, 101 Reykjavík"
+SELLER_EMAIL = "sala@irja.is"
+SELLER_PHONE = "+354-555-1234"
 
 [[d1_databases]]
 binding = "DB"

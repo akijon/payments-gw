@@ -22,6 +22,14 @@ export interface Env {
   LANDSBANKINN_API_BASE: string;
   LANDSBANKINN_OAUTH_URL: string;
 
+  // ─── Seller identity (wrangler.toml [vars] or secret) ───
+  SELLER_NAME: string;
+  SELLER_KENNITALA: string;
+  SELLER_VSK_NUMBER: string;
+  SELLER_ADDRESS: string;
+  SELLER_EMAIL: string;
+  SELLER_PHONE?: string;
+
   // ─── Verifone secrets (wrangler secret put) ──────────────
   VERIFONE_CLIENT_ID: string;
   VERIFONE_CLIENT_SECRET: string;

@@ -42,6 +42,7 @@ checkoutRoute.post('/', async (c) => {
     items?: unknown;
     customer_email?: unknown;
     customer_name?: unknown;
+    buyer_kennitala?: unknown;
     unit_price?: unknown;
     total_amount?: unknown;
     amount?: unknown;
@@ -60,7 +61,7 @@ checkoutRoute.post('/', async (c) => {
     return c.json({ error: 'Invalid JSON body', code: 'validation' }, 400);
   }
 
-  const allowedFields = new Set(['items', 'customer_email', 'customer_name']);
+  const allowedFields = new Set(['items', 'customer_email', 'customer_name', 'buyer_kennitala']);
   const unexpectedFields = Object.keys(body).filter((field) => !allowedFields.has(field));
   if (unexpectedFields.length > 0) {
     const moneyFields = unexpectedFields.filter((field) => ['amount', 'unit_price', 'total_amount'].includes(field));
@@ -108,11 +109,25 @@ checkoutRoute.post('/', async (c) => {
   // otherwise the origin serving this request is the correct callback origin.
   const publicApiOrigin = c.env.PUBLIC_API_URL ?? new URL(c.req.url).origin;
 
+  // Validate buyer kennitala if provided
+  let buyerKennitala: string | undefined;
+  if (body.buyer_kennitala !== undefined && body.buyer_kennitala !== null) {
+    if (typeof body.buyer_kennitala !== 'string') {
+      return c.json({ error: 'Invalid buyer_kennitala', code: 'validation' }, 400);
+    }
+    const ktDigits = body.buyer_kennitala.replace(/\D/g, '');
+    if (ktDigits.length !== 10 || !/^\d{10}$/.test(ktDigits)) {
+      return c.json({ error: 'buyer_kennitala must be 10 digits', code: 'validation' }, 400);
+    }
+    buyerKennitala = ktDigits;
+  }
+
   const outcome = await createCheckoutUseCase(c.env, {
     idempotencyKey,
     items: body.items,
     customerEmail,
     customerName,
+    buyerKennitala,
     publicApiOrigin,
     executionCtx: c.executionCtx,
   });
