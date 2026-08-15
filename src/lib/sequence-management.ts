@@ -145,7 +145,20 @@ export function assertSequenceFinalizable(integrity: { valid: boolean; gaps?: nu
 }
 
 /**
- * Validate sequence integrity - detect gaps or out-of-order numbers.
+ * Validate sequence integrity - detect gaps, out-of-order numbers, and
+ * cursor/ledger divergence.
+ *
+ * Checking only the issued numbers against each other misses corruption at
+ * the ends of the range: a claim that wins `next_number`'s increment but
+ * never completes its invoice write leaves a hole neither before nor between
+ * issued rows, so a purely pairwise gap scan reports it as valid. The same
+ * gap also makes an empty invoice table with a non-1 cursor look valid, since
+ * there are no rows to compare at all.
+ *
+ * The cursor (`next_number`) is therefore load-bearing here: for an intact
+ * series, `next_number - 1` must equal both the count of issued numbers and
+ * their maximum (i.e. the series is exactly 1..count with nothing claimed
+ * beyond it and nothing missing from it).
  */
 export async function validateSequenceIntegrity(
   db: D1Database,
@@ -156,52 +169,66 @@ export async function validateSequenceIntegrity(
     const tableName = sequenceType === 'invoice' ? 'invoices' : 'credit_notes';
     const numberColumn = sequenceType === 'invoice' ? 'invoice_number' : 'credit_note_number';
     const prefix = sequenceType === 'invoice' ? 'REIK' : 'KREDIT';
+    const cursorTable = sequenceType === 'invoice' ? 'invoice_sequence' : 'credit_note_sequence';
 
-    // Get all issued numbers for this year
+    const cursorRow = await db
+      .prepare(`SELECT next_number FROM ${cursorTable} WHERE year = ?`)
+      .bind(year)
+      .first<{ next_number: number }>();
+    // No cursor row means no number has ever been claimed for this year —
+    // nothing to reconcile against, and the first claim will create the row.
+    const claimedCount = cursorRow ? cursorRow.next_number - 1 : 0;
+
     const issuedNumbers = await db
       .prepare(
         `
-      SELECT ${numberColumn} as number 
-      FROM ${tableName} 
-      WHERE ${numberColumn} LIKE '${prefix}-${year}-%' 
+      SELECT ${numberColumn} as number
+      FROM ${tableName}
+      WHERE ${numberColumn} LIKE '${prefix}-${year}-%'
       ORDER BY ${numberColumn}
     `,
       )
       .all<{ number: string }>();
 
-    if (!issuedNumbers.results || issuedNumbers.results.length === 0) {
-      return { valid: true }; // No numbers issued yet
-    }
-
-    // Extract sequence numbers and check for gaps
     const sequences: number[] = [];
-    const gaps: number[] = [];
-
-    for (const row of issuedNumbers.results) {
+    for (const row of issuedNumbers.results ?? []) {
       const match = row.number.match(new RegExp(`^${prefix}-${year}-(\\d{5})$`));
-      if (match) {
-        sequences.push(parseInt(match[1], 10));
-      }
+      if (match) sequences.push(parseInt(match[1], 10));
     }
-
     sequences.sort((a, b) => a - b);
 
-    // Detect gaps in the sequence
-    for (let i = 0; i < sequences.length - 1; i++) {
-      const current = sequences[i];
-      const next = sequences[i + 1];
-
-      if (next - current > 1) {
-        // Gap detected
-        for (let missing = current + 1; missing < next; missing++) {
-          gaps.push(missing);
-        }
-      }
+    if (claimedCount === 0) {
+      // Nothing claimed yet: any issued row at all is corruption (numbers
+      // must come from the cursor), and there is nothing else to check.
+      return sequences.length === 0 ? { valid: true } : { valid: false, gaps: [] };
     }
 
+    // The most recently claimed number is legitimately allowed to be missing
+    // from `sequences`: claiming the cursor and persisting its invoice row are
+    // two separate D1 calls in the same request, so the row for a claim that
+    // is still in flight (or that failed and is about to be retried by its own
+    // caller) has not been written yet. Only a gap that is NOT simply "the
+    // single most recent claim hasn't landed" indicates a previous request's
+    // write never completed — that is corruption a retry cannot repair.
+    const gaps: number[] = [];
+    let expected = 1;
+    for (const n of sequences) {
+      while (expected < n) {
+        gaps.push(expected);
+        expected++;
+      }
+      expected = n + 1;
+    }
+    while (expected <= claimedCount) {
+      gaps.push(expected);
+      expected++;
+    }
+
+    const tolerableInFlightGap = gaps.length === 1 && gaps[0] === claimedCount;
+
     return {
-      valid: gaps.length === 0,
-      gaps: gaps.length > 0 ? gaps : undefined,
+      valid: gaps.length === 0 || tolerableInFlightGap,
+      gaps: gaps.length > 0 && !tolerableInFlightGap ? gaps : undefined,
     };
   } catch (error) {
     return {
@@ -293,7 +320,7 @@ export function createTemporaryConfirmation(params: {
 
 /**
  * Enhanced sequence claiming with incident reporting for audit compliance.
- * 
+ *
  * Integrates with the incident reporting system to provide structured
  * observability for Skatturinn compliance audits when sequence conflicts occur.
  */
@@ -309,7 +336,7 @@ export async function claimSequenceWithIncidentReporting(
       currency: string;
     };
     maxRetries?: number;
-  }
+  },
 ): Promise<{
   success: boolean;
   sequenceNumber?: number;
@@ -321,10 +348,7 @@ export async function claimSequenceWithIncidentReporting(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // Ensure year row exists
-      await db
-        .prepare(`INSERT OR IGNORE INTO ${tableName} (year, next_number) VALUES (?, 1)`)
-        .bind(year)
-        .run();
+      await db.prepare(`INSERT OR IGNORE INTO ${tableName} (year, next_number) VALUES (?, 1)`).bind(year).run();
 
       // Atomic sequence claim
       const claimed = await db
@@ -332,7 +356,7 @@ export async function claimSequenceWithIncidentReporting(
           `UPDATE ${tableName} 
            SET next_number = next_number + 1 
            WHERE year = ? 
-           RETURNING next_number - 1 AS sequence`
+           RETURNING next_number - 1 AS sequence`,
         )
         .bind(year)
         .first<{ sequence: number }>();
@@ -342,11 +366,11 @@ export async function claimSequenceWithIncidentReporting(
       }
     } catch (error) {
       console.error(`Sequence claim attempt ${attempt}/${maxRetries} failed:`, error);
-      
+
       if (attempt === maxRetries) {
         // Import incident functions dynamically to avoid circular dependencies
         const { createSequenceRaceIncident, storeIncidentIdempotent } = await import('./incident-reporter');
-        
+
         // Create incident report for final failure
         const incident = createSequenceRaceIncident({
           orderId: context.orderId,
@@ -363,7 +387,7 @@ export async function claimSequenceWithIncidentReporting(
       }
 
       // Exponential backoff
-      await new Promise(resolve => setTimeout(resolve, 50 * Math.pow(2, attempt - 1)));
+      await new Promise((resolve) => setTimeout(resolve, 50 * Math.pow(2, attempt - 1)));
     }
   }
 

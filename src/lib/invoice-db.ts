@@ -55,26 +55,20 @@ export async function nextInvoiceNumber(db: D1Database, year: number): Promise<n
 }
 
 /**
- * Years whose invoice series has already been verified intact in this isolate.
- *
- * The integrity scan reads every invoice issued in the year, so running it per
- * finalization would cost an O(n) D1 read per invoice. Verifying once per year
- * on the claim path keeps the guarantee where it matters — no number is issued
- * onto a broken ledger — without paying the scan on every sale.
- */
-const verifiedSequenceYears = new Set<number>();
-
-/** Test seam: forces the next claim for a year to re-run the integrity scan. */
-export function resetSequenceVerificationCache(): void {
-  verifiedSequenceYears.clear();
-}
-
-/**
  * Claim the next invoice number, refusing to issue onto a broken series.
  *
  * The integrity check runs BEFORE the increment: a rejected finalization must
  * not consume a number, or the rejection would itself widen the gap it is
  * refusing to append to.
+ *
+ * Runs on EVERY claim, not cached per year. A once-per-isolate cache would
+ * defeat the gate exactly when it matters: a claim that wins the
+ * `INSERT OR IGNORE` race and then loses its invoice write — or two requests
+ * racing on the same claim — can open a gap after the year was already marked
+ * verified, and every claim after that would skip validation permanently.
+ * Invoice finalization is one D1 round trip per sale, not a hot path, so
+ * paying the scan every time is the right trade against a silently
+ * unenforced integrity guarantee.
  *
  * Only true out-of-order corruption rejects here. Transient lock/row contention
  * is not corruption — it surfaces as a failed claim and is handled by the
@@ -82,11 +76,8 @@ export function resetSequenceVerificationCache(): void {
  * failed over a recoverable database race.
  */
 export async function claimVerifiedInvoiceNumber(db: D1Database, year: number): Promise<number> {
-  if (!verifiedSequenceYears.has(year)) {
-    const { validateSequenceIntegrity, assertSequenceFinalizable } = await import('./sequence-management');
-    assertSequenceFinalizable(await validateSequenceIntegrity(db, 'invoice', year));
-    verifiedSequenceYears.add(year);
-  }
+  const { validateSequenceIntegrity, assertSequenceFinalizable } = await import('./sequence-management');
+  assertSequenceFinalizable(await validateSequenceIntegrity(db, 'invoice', year));
 
   return nextInvoiceNumber(db, year);
 }

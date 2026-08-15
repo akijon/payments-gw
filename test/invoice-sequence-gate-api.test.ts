@@ -8,7 +8,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
-import { resetSequenceVerificationCache } from '../src/lib/invoice-db';
 import { createOrderWithAccessToken } from '../src/lib/db';
 import type { LineItem } from '../src/types/api';
 
@@ -57,16 +56,26 @@ async function seedInvoiceNumber(invoiceNumber: string, suffix: string): Promise
   )
     .bind(`seqgate-src-${suffix}`, `IRJA-seqgate-src-${suffix}`)
     .run();
-  await env.DB.prepare(
-    `INSERT INTO invoices (id, order_id, invoice_number, issue_date) VALUES (?, ?, ?, '2031-01-01')`,
-  )
+  await env.DB.prepare(`INSERT INTO invoices (id, order_id, invoice_number, issue_date) VALUES (?, ?, ?, '2031-01-01')`)
     .bind(`seqgate-inv-${suffix}`, `seqgate-src-${suffix}`, invoiceNumber)
+    .run();
+}
+
+/**
+ * Advance the year's cursor without writing invoice rows — simulates claims
+ * whose invoice write never landed, which is the actual shape of ledger
+ * corruption (as opposed to seedInvoiceNumber, which writes a row the cursor
+ * never claimed).
+ */
+async function advanceCursor(count: number): Promise<void> {
+  await env.DB.prepare('INSERT OR IGNORE INTO invoice_sequence (year, next_number) VALUES (?, 1)').bind(YEAR).run();
+  await env.DB.prepare('UPDATE invoice_sequence SET next_number = ? WHERE year = ?')
+    .bind(count + 1, YEAR)
     .run();
 }
 
 describe('Invoice route sequence gate', () => {
   beforeEach(async () => {
-    resetSequenceVerificationCache();
     await env.DB.prepare(`DELETE FROM invoices WHERE invoice_number LIKE 'REIK-${YEAR}-%'`).run();
     await env.DB.prepare("DELETE FROM order_access_tokens WHERE order_id LIKE 'seqgate-%'").run();
     await env.DB.prepare("DELETE FROM orders WHERE id LIKE 'seqgate-%'").run();
@@ -84,6 +93,7 @@ describe('Invoice route sequence gate', () => {
   });
 
   it('refuses to finalize when the series has a gap', async () => {
+    await advanceCursor(3);
     await seedInvoiceNumber(`REIK-${YEAR}-00001`, 'a');
     await seedInvoiceNumber(`REIK-${YEAR}-00003`, 'b');
     await seedPaidOrder('seqgate-broken', 'seqgate-token-broken-aaaaaaa');
@@ -97,6 +107,7 @@ describe('Invoice route sequence gate', () => {
   });
 
   it('does not persist an invoice for the rejected order', async () => {
+    await advanceCursor(3);
     await seedInvoiceNumber(`REIK-${YEAR}-00001`, 'a');
     await seedInvoiceNumber(`REIK-${YEAR}-00003`, 'b');
     await seedPaidOrder('seqgate-broken', 'seqgate-token-broken-aaaaaaa');
@@ -112,6 +123,7 @@ describe('Invoice route sequence gate', () => {
   });
 
   it('still requires authorization before reporting a sequence problem', async () => {
+    await advanceCursor(3);
     await seedInvoiceNumber(`REIK-${YEAR}-00001`, 'a');
     await seedInvoiceNumber(`REIK-${YEAR}-00003`, 'b');
     await seedPaidOrder('seqgate-broken', 'seqgate-token-broken-aaaaaaa');

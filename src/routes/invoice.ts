@@ -100,6 +100,22 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
     ...item,
     vat_rate: (item as { vat_rate?: number }).vat_rate ?? 24,
   })) as VatLineItem[];
+  // Shipping must appear as its own line, not just as a number the pricing
+  // gate reconciles against — otherwise a charge that includes shipping
+  // finalizes correctly but the persisted document silently omits it (e.g. a
+  // 10,990 charge with 990 shipping would compute and persist as 10,000).
+  // Standard rate: shipping_incl_vat has no per-order VAT rate of its own
+  // (see migration 0014_shipping_cost.sql).
+  if (order.shipping_incl_vat > 0) {
+    vatItems.push({
+      product_id: 'SHIPPING',
+      name: 'Sendingarkostnaður',
+      quantity: 1,
+      unit_price: order.shipping_incl_vat,
+      total_amount: order.shipping_incl_vat,
+      vat_rate: 24,
+    });
+  }
 
   // Reconcile the charge BEFORE claiming a number: an order whose invoice
   // arithmetic does not match the money taken must not consume a sequence
@@ -125,19 +141,27 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
     });
   }
 
+  // shipping_incl_vat is NOT passed separately here: it was folded into
+  // vatItems above as its own line, so draft.summary already includes it in
+  // both subtotal_excl_vat and vat_breakdown. Passing it again would double
+  // count it and reject every order that actually charged for shipping.
   const { assertPricingIntegrity, PricingIntegrityError } = await import('../lib/payment-integrity');
   try {
     assertPricingIntegrity({
       chargedAmount: order.amount,
       subtotalExclVat: draft.summary.subtotal_excl_vat,
       totalVat: draft.summary.vat_breakdown.reduce((sum, entry) => sum + entry.vat_amount, 0),
-      shippingInclVat: order.shipping_incl_vat,
+      shippingInclVat: 0,
     });
   } catch (error) {
     if (error instanceof PricingIntegrityError) {
-      return c.json({ error: 'Invoice does not reconcile with the charged amount', code: error.code, details: error.details }, 409, {
-        'Cache-Control': 'no-store',
-      });
+      return c.json(
+        { error: 'Invoice does not reconcile with the charged amount', code: error.code, details: error.details },
+        409,
+        {
+          'Cache-Control': 'no-store',
+        },
+      );
     }
     throw error;
   }
@@ -151,9 +175,13 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
   } catch (error) {
     const { SequenceIntegrityError } = await import('../lib/sequence-management');
     if (error instanceof SequenceIntegrityError) {
-      return c.json({ error: 'Invoice sequence integrity check failed', code: error.code, details: error.details }, 409, {
-        'Cache-Control': 'no-store',
-      });
+      return c.json(
+        { error: 'Invoice sequence integrity check failed', code: error.code, details: error.details },
+        409,
+        {
+          'Cache-Control': 'no-store',
+        },
+      );
     }
     throw error;
   }

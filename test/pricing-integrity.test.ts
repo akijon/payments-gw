@@ -92,15 +92,15 @@ describe('Pricing integrity gate', () => {
     });
 
     it('blocks a fractional VAT amount', () => {
-      expect(() =>
-        assertPricingIntegrity({ ...BALANCED, totalVat: 1_934.5, chargedAmount: 9_999.5 }),
-      ).toThrow(PricingIntegrityError);
+      expect(() => assertPricingIntegrity({ ...BALANCED, totalVat: 1_934.5, chargedAmount: 9_999.5 })).toThrow(
+        PricingIntegrityError,
+      );
     });
 
     it('blocks a negative shipping cost', () => {
-      expect(() =>
-        assertPricingIntegrity({ ...BALANCED, shippingInclVat: -990, chargedAmount: 9_010 }),
-      ).toThrow(PricingIntegrityError);
+      expect(() => assertPricingIntegrity({ ...BALANCED, shippingInclVat: -990, chargedAmount: 9_010 })).toThrow(
+        PricingIntegrityError,
+      );
     });
 
     it('blocks a non-positive charge', () => {
