@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../types/env';
-import type { VatLineItem, Invoice } from '../types/invoice';
+import type { VatLineItem, Invoice, CreditNote } from '../types/invoice';
 import { bearerToken } from '../lib/http';
 
 export const invoiceRoute = new Hono<{ Bindings: Env }>();
@@ -126,6 +126,11 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
   // create the first invoice for the same order, only one insert succeeds.
   // The loser's insert is silently ignored (inserted=false); it must re-read
   // the existing record and return that instead.
+  const payloadJson = JSON.stringify(invoice);
+  const { computeAuditHash, computeRetentionDate } = await import('../lib/invoice-db');
+  const auditHash = await computeAuditHash(payloadJson);
+  const retentionUntil = computeRetentionDate(issueDate);
+
   const { inserted } = await createInvoiceRecord(c.env.DB, {
     id: generateUUID(),
     orderId,
@@ -134,7 +139,9 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
     dueDate: null, // Immediate payment — B2C receipt
     deliveryDate: order.paid_at?.slice(0, 10) ?? issueDate,
     buyerKennitala: formatKennitala(buyerKennitala),
-    payloadJson: JSON.stringify(invoice),
+    payloadJson,
+    auditHash,
+    retentionUntil,
   });
 
   if (!inserted) {
@@ -156,6 +163,143 @@ invoiceRoute.get('/orders/:id/invoice', async (c) => {
   }
 
   return c.json({ invoice }, 200, { 'Cache-Control': 'no-store' });
+});
+
+// ─── Credit note (kreditreikningur) ──────────────────────────────
+
+/**
+ * GET /api/orders/:id/credit-note
+ *
+ * Generates or retrieves an Icelandic credit note (kreditreikningur) for a
+ * refunded order. Requires Bearer auth (same order_status_token).
+ *
+ * A credit note reverses the previously issued invoice (sölureikningur):
+ * - Only orders with status 'refunded' can produce a credit note
+ * - An invoice must have been issued first (the original invoice is
+ *   retrieved and its amounts are negated)
+ * - Uses a separate KREDIT-YYYY-NNNNN sequence (does not gap the invoice seq)
+ * - References the original REIK-YYYY-NNNNN number in the header
+ *
+ * Legal basis: Reglugerð nr. 505/2013, Lög um reikningshald nr. 145/1994.
+ */
+invoiceRoute.get('/orders/:id/credit-note', async (c) => {
+  const orderId = c.req.param('id');
+  const { getOrderById, hasOrderAccess, generateUUID } = await import('../lib/db');
+  const accessToken = bearerToken(c.req.header('Authorization'));
+
+  if (!(await hasOrderAccess(c.env.DB, orderId, accessToken))) {
+    return c.json({ error: 'Valid bearer token required', code: 'unauthorized' }, 401, {
+      'Cache-Control': 'no-store',
+      'WWW-Authenticate': 'Bearer',
+    });
+  }
+
+  const order = await getOrderById(c.env.DB, orderId);
+  if (!order) {
+    return c.json({ error: 'Order not found' }, 404, { 'Cache-Control': 'no-store' });
+  }
+
+  // Only refunded orders can produce a credit note
+  if (order.status !== 'refunded') {
+    return c.json(
+      { error: 'Order is not refunded', code: 'not_refunded', order_status: order.status },
+      409,
+      { 'Cache-Control': 'no-store' },
+    );
+  }
+
+  // Check if a credit note already exists
+  const { getCreditNoteByOrderId, createCreditNoteRecord, nextCreditNoteNumber } =
+    await import('../lib/credit-note-db');
+  const existing = await getCreditNoteByOrderId(c.env.DB, orderId);
+
+  if (existing && existing.status === 'issued') {
+    if (existing.payload_json) {
+      try {
+        const storedCreditNote = JSON.parse(existing.payload_json) as CreditNote;
+        return c.json({ credit_note: storedCreditNote }, 200, { 'Cache-Control': 'no-store' });
+      } catch {
+        // Corrupt payload — fall through to recompute (shouldn't happen)
+      }
+    }
+  }
+
+  // Retrieve the original invoice — a credit note must reference it
+  const { getInvoiceByOrderId } = await import('../lib/invoice-db');
+  const invoiceRecord = await getInvoiceByOrderId(c.env.DB, orderId);
+
+  if (!invoiceRecord || !invoiceRecord.payload_json) {
+    return c.json(
+      { error: 'No invoice found to credit', code: 'no_original_invoice' },
+      409,
+      { 'Cache-Control': 'no-store' },
+    );
+  }
+
+  let originalInvoice: Invoice;
+  try {
+    originalInvoice = JSON.parse(invoiceRecord.payload_json) as Invoice;
+  } catch {
+    return c.json(
+      { error: 'Original invoice payload is corrupt', code: 'corrupt_original' },
+      500,
+      { 'Cache-Control': 'no-store' },
+    );
+  }
+
+  // Claim credit note number atomically (separate sequence from invoices)
+  const { computeCreditNote, buildCreditNoteNumber } = await import(
+    '../lib/invoice-computation'
+  );
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const seq = await nextCreditNoteNumber(c.env.DB, year);
+  const creditNoteNumber = buildCreditNoteNumber(year, seq);
+  const issueDate = now.toISOString().slice(0, 10);
+
+  const creditNote = computeCreditNote(originalInvoice, creditNoteNumber, issueDate);
+
+  if (!creditNote) {
+    return c.json(
+      { error: 'Failed to compute credit note', code: 'computation_failed' },
+      500,
+      { 'Cache-Control': 'no-store' },
+    );
+  }
+
+  // Persist credit note record with the computed payload
+  const buyerKennitala = invoiceRecord.buyer_kennitala;
+  const creditPayloadJson = JSON.stringify(creditNote);
+  const { computeAuditHash, computeRetentionDate } = await import('../lib/invoice-db');
+  const creditAuditHash = await computeAuditHash(creditPayloadJson);
+  const creditRetentionUntil = computeRetentionDate(issueDate);
+
+  const { inserted } = await createCreditNoteRecord(c.env.DB, {
+    id: generateUUID(),
+    orderId,
+    creditNoteNumber,
+    originalInvoiceNumber: originalInvoice.header.invoice_number,
+    issueDate,
+    buyerKennitala,
+    payloadJson: creditPayloadJson,
+    auditHash: creditAuditHash,
+    retentionUntil: creditRetentionUntil,
+  });
+
+  if (!inserted) {
+    // A concurrent request won the race — re-read and return the existing credit note
+    const raced = await getCreditNoteByOrderId(c.env.DB, orderId);
+    if (raced && raced.payload_json) {
+      try {
+        const storedCreditNote = JSON.parse(raced.payload_json) as CreditNote;
+        return c.json({ credit_note: storedCreditNote }, 200, { 'Cache-Control': 'no-store' });
+      } catch {
+        // Corrupt payload — fall through
+      }
+    }
+  }
+
+  return c.json({ credit_note: creditNote }, 200, { 'Cache-Control': 'no-store' });
 });
 
 /**

@@ -13,6 +13,7 @@ import type {
   VatRate,
   Invoice,
   InvoiceLineItem,
+  CreditNote,
   VatBreakdownEntry,
   SellerInfo,
   BuyerInfo,
@@ -209,4 +210,66 @@ export function parseInvoiceNumber(invoiceNumber: string): { year: number; seque
   const match = invoiceNumber.match(/^REIK-(\d{4})-(\d{5})$/);
   if (!match) return null;
   return { year: Number(match[1]), sequence: Number(match[2]) };
+}
+
+// ─── Credit note number generation ───────────────────────────────
+
+export function buildCreditNoteNumber(year: number, sequence: number): string {
+  return `KREDIT-${year}-${String(sequence).padStart(5, '0')}`;
+}
+
+export function parseCreditNoteNumber(creditNoteNumber: string): { year: number; sequence: number } | null {
+  const match = creditNoteNumber.match(/^KREDIT-(\d{4})-(\d{5})$/);
+  if (!match) return null;
+  return { year: Number(match[1]), sequence: Number(match[2]) };
+}
+
+// ─── Credit note assembly ───────────────────────────────────────
+
+/**
+ * Compute a credit note by negating an existing invoice's amounts.
+ *
+ * A kreditreikningur reverses a sölureikningur: every line item's
+ * unit_price_excl_vat, vat_amount, and total_incl_vat are negated,
+ * as are the summary totals and VAT breakdown entries. The original
+ * invoice number is referenced in the header.
+ *
+ * Returns null if the original invoice is null or has no items.
+ */
+export function computeCreditNote(
+  original: Invoice,
+  creditNoteNumber: string,
+  issueDate: string,
+): CreditNote | null {
+  if (!original || original.items.length === 0) return null;
+
+  const items: InvoiceLineItem[] = original.items.map((item) => ({
+    ...item,
+    unit_price_excl_vat: -item.unit_price_excl_vat,
+    vat_amount: -item.vat_amount,
+    total_incl_vat: -item.total_incl_vat,
+  }));
+
+  const vat_breakdown: VatBreakdownEntry[] = original.summary.vat_breakdown.map((entry) => ({
+    ...entry,
+    taxable_base: -entry.taxable_base,
+    vat_amount: -entry.vat_amount,
+  }));
+
+  return {
+    header: {
+      credit_note_number: creditNoteNumber,
+      original_invoice_number: original.header.invoice_number,
+      issue_date: issueDate,
+      currency: original.header.currency,
+    },
+    seller: original.seller,
+    buyer: original.buyer,
+    items,
+    summary: {
+      subtotal_excl_vat: -original.summary.subtotal_excl_vat,
+      vat_breakdown,
+      total_amount_incl_vat: -original.summary.total_amount_incl_vat,
+    },
+  };
 }

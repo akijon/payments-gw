@@ -207,6 +207,36 @@ CREATE TABLE IF NOT EXISTS invoice_sequence (
 );
 `;
 
+const MIGRATION_0010 = `
+CREATE TABLE IF NOT EXISTS credit_notes (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    credit_note_number TEXT NOT NULL UNIQUE,
+    original_invoice_number TEXT NOT NULL,
+    issue_date TEXT NOT NULL,
+    buyer_kennitala TEXT,
+    status TEXT NOT NULL DEFAULT 'issued',
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    CHECK (status IN ('issued', 'void'))
+);
+CREATE INDEX IF NOT EXISTS idx_credit_notes_order_id ON credit_notes(order_id);
+CREATE INDEX IF NOT EXISTS idx_credit_notes_number ON credit_notes(credit_note_number);
+CREATE INDEX IF NOT EXISTS idx_credit_notes_original ON credit_notes(original_invoice_number);
+CREATE TABLE IF NOT EXISTS credit_note_sequence (
+    year INTEGER PRIMARY KEY,
+    next_number INTEGER NOT NULL DEFAULT 1
+);
+`;
+
+const MIGRATION_0011 = `
+ALTER TABLE invoices ADD COLUMN audit_hash TEXT;
+ALTER TABLE invoices ADD COLUMN retention_until TEXT;
+ALTER TABLE credit_notes ADD COLUMN audit_hash TEXT;
+ALTER TABLE credit_notes ADD COLUMN retention_until TEXT;
+`;
+
 function splitSql(sql: string): string[] {
   return sql
     .split(';')
@@ -226,6 +256,8 @@ beforeAll(async () => {
     { name: '0007_order_number_index.sql', queries: splitSql(MIGRATION_0007) },
     { name: '0008_payment_method.sql', queries: splitSql(MIGRATION_0008) },
     { name: '0009_invoice_tables.sql', queries: splitSql(MIGRATION_0009) },
+    { name: '0010_credit_notes.sql', queries: splitSql(MIGRATION_0010) },
+    { name: '0011_audit_hash.sql', queries: splitSql(MIGRATION_0011) },
   ];
   await applyD1Migrations(env.DB, migrations);
 });

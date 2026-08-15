@@ -1,8 +1,35 @@
 /**
  * D1 invoice query helpers — sequential numbering, creation, retrieval.
+ *
+ * Audit hash: SHA-256 of the exact payload_json stored at issue time.
+ * Retention: issue_date + 7 years (Icelandic accounting law requirement).
  */
 
 import type { InvoiceRecord } from '../types/invoice';
+
+/** 7-year retention period for Icelandic accounting records. */
+export const RETENTION_YEARS = 7;
+
+/**
+ * Compute SHA-256 hash of a string using the Web Crypto API.
+ * Returns hex-encoded hash prefixed with "sha256:" for algorithm identification.
+ */
+export async function computeAuditHash(payloadJson: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(payloadJson);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `sha256:${hashHex}`;
+}
+
+/** Compute retention date: issue_date + RETENTION_YEARS, as YYYY-MM-DD. */
+export function computeRetentionDate(issueDate: string): string {
+  const [year, month, day] = issueDate.split('-').map(Number);
+  if (!year || !month || !day) return issueDate;
+  const retentionYear = year + RETENTION_YEARS;
+  return `${retentionYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
 
 /**
  * Atomically claim the next invoice number for the given year.
@@ -46,6 +73,8 @@ interface InvoiceRow {
   buyer_kennitala: string | null;
   status: string;
   payload_json: string | null;
+  audit_hash: string | null;
+  retention_until: string | null;
   created_at: string;
 }
 
@@ -60,6 +89,8 @@ function rowToRecord(row: InvoiceRow): InvoiceRecord {
     buyer_kennitala: row.buyer_kennitala,
     status: row.status as InvoiceRecord['status'],
     payload_json: row.payload_json,
+    audit_hash: row.audit_hash,
+    retention_until: row.retention_until,
     created_at: row.created_at,
   };
 }
@@ -75,14 +106,16 @@ export async function createInvoiceRecord(
     deliveryDate: string | null;
     buyerKennitala: string | null;
     payloadJson: string;
+    auditHash: string;
+    retentionUntil: string;
   },
 ): Promise<{ inserted: boolean }> {
   // INSERT OR IGNORE: if a record already exists for this order_id (concurrent
   // requests), the insert is silently skipped and the caller must re-read.
   const result = await db
     .prepare(
-      `INSERT OR IGNORE INTO invoices (id, order_id, invoice_number, issue_date, due_date, delivery_date, buyer_kennitala, status, payload_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?)`,
+      `INSERT OR IGNORE INTO invoices (id, order_id, invoice_number, issue_date, due_date, delivery_date, buyer_kennitala, status, payload_json, audit_hash, retention_until)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?)`,
     )
     .bind(
       params.id,
@@ -93,6 +126,8 @@ export async function createInvoiceRecord(
       params.deliveryDate,
       params.buyerKennitala,
       params.payloadJson,
+      params.auditHash,
+      params.retentionUntil,
     )
     .run();
   return { inserted: (result.meta.changes ?? 0) === 1 };
