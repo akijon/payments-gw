@@ -19,7 +19,7 @@ describe('Incident Reporting', () => {
 
   beforeEach(async () => {
     db = env.DB;
-    
+
     // Clean up any existing test data
     await db.prepare('DELETE FROM incidents').run();
     await db.prepare('DELETE FROM orders WHERE id LIKE "ORD-TEST-%"').run();
@@ -68,9 +68,11 @@ describe('Incident Reporting', () => {
 
       expect(incident.audit_trail).toEqual({
         reason_code: 'SKATTURINN_COMPLIANCE_LOCK_ACT_145_1994',
-        detail: 'Sequential invoice number generation encountered a concurrent write lock. Deferred emission to avoid gap in numbering series.',
+        detail:
+          'Sequential invoice number generation encountered a concurrent write lock. Deferred emission to avoid gap in numbering series.',
         customer_notified: true,
-        customer_message_is: 'Greiðsla hefur borist. Pöntun þín er móttekin og löglegur sölureikningur verður sendur í tölvupósti innan skamms.',
+        customer_message_is:
+          'Greiðsla hefur borist. Pöntun þín er móttekin og löglegur sölureikningur verður sendur í tölvupósti innan skamms.',
         sequence_details: {
           attempted_number: 42,
           queue_position: 3,
@@ -87,7 +89,7 @@ describe('Incident Reporting', () => {
       const retryTime = new Date(incident.action_taken.retry_scheduled_at_utc!);
       const now = new Date();
       const diffMs = retryTime.getTime() - now.getTime();
-      
+
       // Should be approximately 5 minutes (allow 1 second tolerance)
       expect(diffMs).toBeGreaterThan(4 * 60 * 1000);
       expect(diffMs).toBeLessThan(6 * 60 * 1000);
@@ -100,7 +102,7 @@ describe('Incident Reporting', () => {
       await db
         .prepare(
           `INSERT INTO orders (id, order_number, status, currency, amount, items_json)
-           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`
+           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`,
         )
         .bind('ORD-TEST-001', 'IRJA-20260815-001')
         .run();
@@ -133,7 +135,7 @@ describe('Incident Reporting', () => {
       await db
         .prepare(
           `INSERT INTO orders (id, order_number, status, currency, amount, items_json)
-           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`
+           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`,
         )
         .bind('ORD-TEST-002', 'IRJA-20260815-002')
         .run();
@@ -170,7 +172,7 @@ describe('Incident Reporting', () => {
       await db
         .prepare(
           `INSERT INTO orders (id, order_number, status, currency, amount, items_json)
-           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`
+           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`,
         )
         .bind('ORD-TEST-003', 'IRJA-20260815-003')
         .run();
@@ -184,7 +186,7 @@ describe('Incident Reporting', () => {
       };
 
       const incident1 = createSequenceRaceIncident(context);
-      
+
       // Create a different type of incident for same order
       const incident2 = {
         ...incident1,
@@ -214,7 +216,7 @@ describe('Incident Reporting', () => {
       await db
         .prepare(
           `INSERT INTO orders (id, order_number, status, currency, amount, items_json)
-           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`
+           VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`,
         )
         .bind('ORD-TEST-004', 'IRJA-20260815-004')
         .run();
@@ -267,7 +269,7 @@ describe('Incident Reporting', () => {
       // Clean up first
       await db.prepare('DELETE FROM incidents').run();
       await db.prepare('DELETE FROM orders WHERE id LIKE "ORD-ACTIVE%" OR id LIKE "ORD-RESOLVED%"').run();
-      
+
       // Create test orders first
       const orderIds = ['ORD-ACTIVE-001', 'ORD-ACTIVE-002', 'ORD-RESOLVED-001'];
       for (let i = 0; i < orderIds.length; i++) {
@@ -275,7 +277,7 @@ describe('Incident Reporting', () => {
         await db
           .prepare(
             `INSERT INTO orders (id, order_number, status, currency, amount, items_json)
-             VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`
+             VALUES (?, ?, 'paid', 'ISK', 10000, '[]')`,
           )
           .bind(orderId, `IRJA-${Date.now()}-${i}`) // Unique order numbers
           .run();
@@ -296,12 +298,12 @@ describe('Incident Reporting', () => {
           orderAmount: 10000,
           currency: 'ISK',
         });
-        
+
         // Override severity for test
         incident.severity = ctx.severity;
-        
+
         await storeIncidentIdempotent(db, incident);
-        
+
         // Resolve one incident
         if (ctx.orderId === 'ORD-RESOLVED-001') {
           await resolveIncident(db, incident.incident_id, {
@@ -314,31 +316,31 @@ describe('Incident Reporting', () => {
 
     it('returns only active incidents', async () => {
       const incidents = await getActiveIncidents(db);
-      
+
       expect(incidents).toHaveLength(2);
-      expect(incidents.every(i => i.resolved_at_utc === undefined)).toBe(true);
+      expect(incidents.every((i) => i.resolved_at_utc === undefined)).toBe(true);
     });
 
     it('filters by severity', async () => {
       const incidents = await getActiveIncidents(db, { severity: 'CRITICAL_BLOCKED' });
-      
+
       expect(incidents).toHaveLength(1);
       expect(incidents[0].severity).toBe('CRITICAL_BLOCKED');
       expect(incidents[0].order_id).toBe('ORD-ACTIVE-001');
     });
 
     it('filters by failure type', async () => {
-      const incidents = await getActiveIncidents(db, { 
-        failure_type: 'INVOICE_SEQUENCE_RACE_CONDITION' 
+      const incidents = await getActiveIncidents(db, {
+        failure_type: 'INVOICE_SEQUENCE_RACE_CONDITION',
       });
-      
+
       expect(incidents).toHaveLength(2);
-      expect(incidents.every(i => i.failure_type === 'INVOICE_SEQUENCE_RACE_CONDITION')).toBe(true);
+      expect(incidents.every((i) => i.failure_type === 'INVOICE_SEQUENCE_RACE_CONDITION')).toBe(true);
     });
 
     it('filters by order ID', async () => {
       const incidents = await getActiveIncidents(db, { order_id: 'ORD-ACTIVE-002' });
-      
+
       expect(incidents).toHaveLength(1);
       expect(incidents[0].order_id).toBe('ORD-ACTIVE-002');
     });

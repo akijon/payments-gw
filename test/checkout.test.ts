@@ -136,7 +136,11 @@ describe('POST /api/checkout', () => {
       const resp = await SELF.fetch('https://test.example.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION }),
+        body: JSON.stringify({
+          items: [{ product_id: 'TEST-001', quantity: 1 }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
       });
       expect(resp.status).toBe(200);
       const data = (await resp.json()) as { order_id: string };
@@ -239,7 +243,11 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION }),
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
     });
 
     expect(resp.status).toBe(502);
@@ -266,7 +274,11 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION }),
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
     });
     expect(resp.status).toBe(400);
     expect(await resp.json()).toMatchObject({ code: 'idempotency_key_required' });
@@ -278,7 +290,11 @@ describe('POST /api/checkout', () => {
       SELF.fetch('https://test.example.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION }),
+        body: JSON.stringify({
+          items: [{ product_id: 'TEST-001', quantity: 1 }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
       });
 
     const first = await request();
@@ -306,7 +322,11 @@ describe('POST /api/checkout', () => {
     ).run();
 
     const idempotencyKey = 'checkout-catalog-drift-0001';
-    const body = JSON.stringify({ items: [{ product_id: 'CATALOG-DRIFT-TEST', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION });
+    const body = JSON.stringify({
+      items: [{ product_id: 'CATALOG-DRIFT-TEST', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
 
     const first = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
@@ -345,7 +365,11 @@ describe('POST /api/checkout', () => {
       SELF.fetch('https://test.example.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity }], terms_accepted: true, terms_version: TERMS_VERSION }),
+        body: JSON.stringify({
+          items: [{ product_id: 'TEST-001', quantity }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
       });
 
     expect((await send(1)).status).toBe(200);
@@ -356,7 +380,11 @@ describe('POST /api/checkout', () => {
 
   it('rejects a retry while a checkout attempt is still genuinely in flight', async () => {
     const idempotencyKey = 'checkout-inflight-00001';
-    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION });
+    const body = JSON.stringify({
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
     const first = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
@@ -383,7 +411,11 @@ describe('POST /api/checkout', () => {
 
   it('recovers a persisted provider result after finalization rollback without creating a second HPP session', async () => {
     const idempotencyKey = 'checkout-finalization-recovery-0001';
-    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION });
+    const body = JSON.stringify({
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
     const conflictingOrderId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     await env.DB.prepare(
       `INSERT INTO orders (
@@ -496,7 +528,11 @@ describe('POST /api/checkout', () => {
     // A Worker that dies before persisting checkout_url must not wedge the key
     // forever — once the lease window has passed, a retry should succeed fresh.
     const idempotencyKey = 'checkout-stale-00001';
-    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION });
+    const body = JSON.stringify({
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
 
     // Distinct provider checkout IDs per call, as a real second Verifone session would get.
     const { createCheckout } = await import('../src/lib/verifone');
@@ -557,7 +593,11 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }], terms_accepted: true, terms_version: TERMS_VERSION }),
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
     });
 
     expect(resp.status).toBe(200);

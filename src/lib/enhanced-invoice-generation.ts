@@ -1,6 +1,6 @@
 /**
  * Enhanced invoice generation with integrated incident reporting.
- * 
+ *
  * This module demonstrates how to integrate the incident reporting system
  * with existing invoice generation to provide structured observability
  * for Skatturinn compliance audits when sequence conflicts occur.
@@ -29,10 +29,10 @@ export interface EnhancedInvoiceResult {
 
 /**
  * Generate invoice with enhanced incident reporting and customer communication.
- * 
+ *
  * This function integrates sequence management with incident reporting to provide:
  * - Structured failure tracking for audit compliance
- * - Idempotent incident storage 
+ * - Idempotent incident storage
  * - Customer-facing messages in Icelandic
  * - Automatic incident resolution on retry success
  */
@@ -48,7 +48,7 @@ export async function generateInvoiceWithIncidentReporting(
       buyer_kennitala?: string;
     };
     invoicePayload: string; // Pre-computed invoice JSON
-  }
+  },
 ): Promise<EnhancedInvoiceResult> {
   const { orderId, orderData, invoicePayload } = params;
   const currentYear = new Date().getFullYear();
@@ -127,7 +127,8 @@ export async function generateInvoiceWithIncidentReporting(
         incident: sequenceResult.incident,
         customer_message: {
           type: 'queued_for_sequencing',
-          message_is: 'Greiðsla hefur borist. Pöntun þín er móttekin og löglegur sölureikningur verður sendur í tölvupósti innan skamms.',
+          message_is:
+            'Greiðsla hefur borist. Pöntun þín er móttekin og löglegur sölureikningur verður sendur í tölvupósti innan skamms.',
           estimated_resolution: retryDate.toLocaleTimeString('is-IS', {
             timeZone: 'Atlantic/Reykjavik',
             hour: '2-digit',
@@ -139,11 +140,10 @@ export async function generateInvoiceWithIncidentReporting(
 
     // Fallback error case
     throw new Error('Unexpected sequence claiming result');
-
   } catch (error) {
     // Unexpected error - create incident for investigation
     const { createSequenceRaceIncident, storeIncidentIdempotent } = await import('./incident-reporter');
-    
+
     const incident = createSequenceRaceIncident({
       orderId,
       attemptedNumber: 0,
@@ -178,7 +178,7 @@ export async function generateInvoiceWithIncidentReporting(
 
 /**
  * Example usage in a route handler:
- * 
+ *
  * ```typescript
  * // In src/routes/invoice.ts
  * const result = await generateInvoiceWithIncidentReporting(env.DB, {
@@ -192,7 +192,7 @@ export async function generateInvoiceWithIncidentReporting(
  *   },
  *   invoicePayload: JSON.stringify(computedInvoice),
  * });
- * 
+ *
  * if (result.success && result.invoice) {
  *   return c.json({
  *     invoice_id: result.invoice.id,

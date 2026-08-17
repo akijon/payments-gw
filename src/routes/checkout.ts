@@ -65,7 +65,14 @@ checkoutRoute.post('/', async (c) => {
     return c.json({ error: 'Invalid JSON body', code: 'validation' }, 400);
   }
 
-  const allowedFields = new Set(['items', 'customer_email', 'customer_name', 'buyer_kennitala', 'terms_accepted', 'terms_version']);
+  const allowedFields = new Set([
+    'items',
+    'customer_email',
+    'customer_name',
+    'buyer_kennitala',
+    'terms_accepted',
+    'terms_version',
+  ]);
   const unexpectedFields = Object.keys(body).filter((field) => !allowedFields.has(field));
   if (unexpectedFields.length > 0) {
     const moneyFields = unexpectedFields.filter((field) => ['amount', 'unit_price', 'total_amount'].includes(field));
