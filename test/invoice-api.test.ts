@@ -16,7 +16,6 @@ import { TERMS_VERSION } from '../src/lib/terms';
 
 // Mock the Verifone API client for checkout kennitala tests.
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'chk-test-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-1',

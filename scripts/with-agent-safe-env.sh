@@ -15,7 +15,9 @@ unset CLOUDFLARE_API_TOKEN \
       2>/dev/null || true
 
 # Verifone
-unset VERIFONE_CLIENT_ID \
+unset VERIFONE_USER_ID \
+      VERIFONE_API_KEY \
+      VERIFONE_CLIENT_ID \
       VERIFONE_CLIENT_SECRET \
       VERIFONE_SCOPE \
       VERIFONE_ENTITY_ID \

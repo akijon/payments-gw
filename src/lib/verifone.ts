@@ -1,5 +1,5 @@
 /**
- * Verifone API client — OAuth2 token, checkout creation, checkout verification
+ * Verifone API client — Basic Auth, checkout creation, checkout verification
  */
 
 import type { Env } from '../types/env';
@@ -14,12 +14,6 @@ import type {
   VerifoneCheckoutResponse,
 } from '../types/api';
 import { withCircuitBreaker } from './circuit-breaker';
-import { getOAuth2ClientCredentialsToken } from './oauth';
-
-// ─── OAuth2 token management ─────────────────────────────────────
-
-const TOKEN_KEY = 'verifone_oauth_token';
-const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
 const UPSTREAM_TIMEOUT_MS = 15_000;
 const MAX_DYNAMIC_DESCRIPTOR_LENGTH = 25;
 
@@ -38,6 +32,17 @@ export interface BuildVerifoneCheckoutRequestParams {
 
 function upstreamError(operation: string, response: Response): Error {
   return new Error(`${operation} failed with HTTP ${response.status}`);
+}
+
+/** Build Verifone's documented RFC 7617 user-UUID/API-key credential. */
+export function buildVerifoneAuthorization(env: Env): string {
+  const userId = env.VERIFONE_USER_ID?.trim();
+  const apiKey = env.VERIFONE_API_KEY?.trim();
+  const printableAscii = /^[\x21-\x7e]+$/;
+  if (!userId || !apiKey || userId.includes(':') || !printableAscii.test(userId) || !printableAscii.test(apiKey)) {
+    throw new Error('Invalid Verifone Basic Auth credentials');
+  }
+  return `Basic ${btoa(`${userId}:${apiKey}`)}`;
 }
 
 /** Non-empty after trim → usable contract ID; otherwise treat as unset. */
@@ -138,21 +143,6 @@ export function buildVerifoneCheckoutRequest(
   };
 }
 
-export async function getVerifoneToken(env: Env): Promise<string> {
-  return getOAuth2ClientCredentialsToken({
-    cache: env.CACHE,
-    cacheKey: TOKEN_KEY,
-    breakerKey: 'verifone',
-    tokenUrl: env.VERIFONE_OAUTH_URL,
-    clientId: env.VERIFONE_CLIENT_ID,
-    clientSecret: env.VERIFONE_CLIENT_SECRET,
-    scope: env.VERIFONE_SCOPE,
-    operation: 'Verifone OAuth2',
-    bufferMs: TOKEN_BUFFER_MS,
-    timeoutMs: UPSTREAM_TIMEOUT_MS,
-  });
-}
-
 // ─── Create checkout session ────────────────────────────────────
 
 export async function createCheckout(
@@ -160,15 +150,15 @@ export async function createCheckout(
   params: BuildVerifoneCheckoutRequestParams,
 ): Promise<{ checkoutId: string; checkoutUrl: string }> {
   // Validation + configurations live in the pure builder so unit tests can
-  // pin HPP method gating without mocking fetch/OAuth.
+  // pin HPP method gating without mocking fetch/authentication.
   const body = buildVerifoneCheckoutRequest(env, params);
-  const token = await getVerifoneToken(env);
+  const authorization = buildVerifoneAuthorization(env);
 
   const resp = await withCircuitBreaker('verifone', () =>
     fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         'Content-Type': 'application/json',
         Accept: '*/*',
       },
@@ -217,7 +207,7 @@ export async function createCustomer(env: Env, params: CreateCustomerParams): Pr
   if (!params.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email)) {
     throw new Error('Invalid customer email');
   }
-  const token = await getVerifoneToken(env);
+  const authorization = buildVerifoneAuthorization(env);
 
   // Verifone's Customer API schema has no top-level first_name/last_name or
   // email fields — those live at email_address and billing.first_name/last_name.
@@ -241,7 +231,7 @@ export async function createCustomer(env: Env, params: CreateCustomerParams): Pr
     fetch(`${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         'Content-Type': 'application/json',
         Accept: '*/*',
       },
@@ -267,13 +257,13 @@ export async function getCheckout(env: Env, checkoutId: string): Promise<Verifon
   if (!/^[A-Za-z0-9._:-]{1,256}$/.test(checkoutId)) {
     throw new Error('Invalid Verifone checkout ID');
   }
-  const token = await getVerifoneToken(env);
+  const authorization = buildVerifoneAuthorization(env);
 
   const resp = await withCircuitBreaker('verifone', () =>
     fetch(`${env.VERIFONE_API_BASE}/v2/checkout/${encodeURIComponent(checkoutId)}`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         Accept: '*/*',
       },
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),

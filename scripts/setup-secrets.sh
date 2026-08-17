@@ -22,9 +22,8 @@ error() {
 
 # Required secrets for the payments gateway
 declare -a REQUIRED_SECRETS=(
-    "VERIFONE_CLIENT_ID"
-    "VERIFONE_CLIENT_SECRET"
-    "VERIFONE_SCOPE"
+    "VERIFONE_USER_ID"
+    "VERIFONE_API_KEY"
     "VERIFONE_ENTITY_ID"
     "VERIFONE_PAYMENT_CONTRACT_ID"
     "VERIFONE_3DS_CONTRACT_ID"
@@ -33,6 +32,11 @@ declare -a REQUIRED_SECRETS=(
     "LANDSBANKINN_CLIENT_SECRET"
     "LANDSBANKINN_SCOPE"
 )
+
+list_secret_names() {
+    npx wrangler secret list 2>/dev/null | node -e \
+        'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>JSON.parse(s).forEach(x=>console.log(x.name)))'
+}
 
 check_wrangler() {
     if ! command -v wrangler >/dev/null; then
@@ -48,7 +52,7 @@ check_wrangler() {
 
 list_current_secrets() {
     log "Current secrets in Cloudflare:"
-    if npx wrangler secret list 2>/dev/null | tail -n +2; then
+    if list_secret_names; then
         echo
     else
         log "Could not list secrets. Check API token permissions."
@@ -66,7 +70,7 @@ set_secret_interactive() {
     echo
     
     # Check if secret already exists
-    if npx wrangler secret list 2>/dev/null | grep -q "^$secret_name"; then
+    if list_secret_names | grep -qx "$secret_name"; then
         log "✅ Secret $secret_name already exists"
         read -p "Update it? [y/N]: " -r update_secret
         if [[ ! "$update_secret" =~ ^[Yy]$ ]]; then
@@ -86,7 +90,7 @@ set_secret_interactive() {
     
     # Set the secret
     log "Setting secret..."
-    if echo "$secret_value" | npx wrangler secret put "$secret_name"; then
+    if printf '%s\n' "$secret_value" | npx wrangler secret put "$secret_name"; then
         log "✅ Successfully set $secret_name"
     else
         log "❌ Failed to set $secret_name"
@@ -112,9 +116,8 @@ setup_all_secrets() {
     
     # Verifone secrets
     log "Setting up Verifone secrets..."
-    set_secret_interactive "VERIFONE_CLIENT_ID" "OAuth2 client ID from Verifone Central"
-    set_secret_interactive "VERIFONE_CLIENT_SECRET" "OAuth2 client secret from Verifone Central"
-    set_secret_interactive "VERIFONE_SCOPE" "OAuth2 scope (usually 'checkout')"
+    set_secret_interactive "VERIFONE_USER_ID" "User UUID from Verifone Central"
+    set_secret_interactive "VERIFONE_API_KEY" "API key associated with the Verifone user"
     set_secret_interactive "VERIFONE_ENTITY_ID" "Entity/Organization ID from Verifone Central"
     set_secret_interactive "VERIFONE_PAYMENT_CONTRACT_ID" "Card payment contract ID"
     set_secret_interactive "VERIFONE_3DS_CONTRACT_ID" "3DS contract ID for SCA compliance"
@@ -132,7 +135,7 @@ check_secrets() {
     
     local missing_secrets=()
     local current_secrets
-    current_secrets=$(npx wrangler secret list 2>/dev/null | tail -n +2 | awk '{print $1}' || echo "")
+    current_secrets=$(list_secret_names || echo "")
     
     for secret in "${REQUIRED_SECRETS[@]}"; do
         if echo "$current_secrets" | grep -q "^$secret$"; then

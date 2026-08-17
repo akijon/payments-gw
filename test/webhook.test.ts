@@ -10,7 +10,6 @@ vi.mock('../src/lib/crypto', () => ({
 }));
 
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn(),
   getCheckout: vi.fn().mockImplementation(async (_env: unknown, checkoutId: string) => ({
     id: checkoutId,

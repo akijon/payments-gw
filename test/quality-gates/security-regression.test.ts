@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 
 vi.mock('../../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'chk-sec-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-sec-1',

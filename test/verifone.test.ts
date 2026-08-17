@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../src/types/env';
-import { getVerifoneToken, parseCheckoutResult } from '../src/lib/verifone';
+import { buildVerifoneAuthorization, parseCheckoutResult } from '../src/lib/verifone';
 import { __resetForTests } from '../src/lib/circuit-breaker';
 
 function testEnv(): Env {
@@ -22,14 +22,37 @@ function testEnv(): Env {
         values.set(key, value);
       },
     } as unknown as KVNamespace,
-    VERIFONE_OAUTH_URL: 'https://oauth.test.verifone/access_token',
     VERIFONE_API_BASE: 'https://api.test.verifone/checkout-service',
-    VERIFONE_CLIENT_ID: 'client-id',
-    VERIFONE_CLIENT_SECRET: 'client-secret',
-    VERIFONE_SCOPE: 'checkout',
+    VERIFONE_USER_ID: 'user-id',
+    VERIFONE_API_KEY: 'api-key',
     VERIFONE_ENTITY_ID: 'entity-1',
-  } as Env;
+    VERIFONE_PAYMENT_CONTRACT_ID: 'contract-1',
+    VERIFONE_3DS_CONTRACT_ID: '3ds-contract-1',
+  } as unknown as Env;
 }
+
+describe('buildVerifoneAuthorization', () => {
+  it('encodes the Verifone user UUID and API key as RFC 7617 Basic credentials', () => {
+    const env = {
+      VERIFONE_USER_ID: '777c31b3-a85f-4823-93a5-9055d1b',
+      VERIFONE_API_KEY: 'api-key-value',
+    } as unknown as Env;
+
+    expect(buildVerifoneAuthorization(env)).toBe(`Basic ${btoa('777c31b3-a85f-4823-93a5-9055d1b:api-key-value')}`);
+  });
+
+  it.each([
+    ['', 'api-key-value'],
+    ['user-id', ''],
+    ['user:id', 'api-key-value'],
+    ['user-id\r\nInjected: value', 'api-key-value'],
+    ['user-id', 'api-key-value\r\nInjected: value'],
+  ])('rejects malformed credentials before building a header', (userId, apiKey) => {
+    const env = { VERIFONE_USER_ID: userId, VERIFONE_API_KEY: apiKey } as unknown as Env;
+
+    expect(() => buildVerifoneAuthorization(env)).toThrow('Invalid Verifone Basic Auth credentials');
+  });
+});
 
 describe('parseCheckoutResult', () => {
   it('returns success with transaction ID for TRANSACTION_SUCCESS', () => {
@@ -127,6 +150,42 @@ describe('parseCheckoutResult', () => {
   });
 });
 
+describe('Verifone Basic Auth requests', () => {
+  beforeEach(() => {
+    __resetForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the same direct Basic credential for checkout creation and verification', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/v2/checkout')) {
+        return Response.json({ id: 'chk-1', url: 'https://pay.test.verifone/chk-1' });
+      }
+      return Response.json({ id: 'chk-1', status: 'PENDING', events: [] });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { createCheckout, getCheckout } = await import('../src/lib/verifone');
+    const env = testEnv();
+
+    await createCheckout(env, {
+      orderNumber: 'ORD-1',
+      amount: 100,
+      currency: 'ISK',
+      returnUrl: 'https://store.example/api/return',
+    });
+    await getCheckout(env, 'chk-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(new Headers(init?.headers).get('Authorization')).toBe(`Basic ${btoa('user-id:api-key')}`);
+    }
+  });
+});
+
 describe('createCustomer', () => {
   beforeEach(() => {
     __resetForTests();
@@ -136,12 +195,13 @@ describe('createCustomer', () => {
     vi.unstubAllGlobals();
   });
 
-  function stubVerifoneCustomerFetch(): { body: () => Record<string, unknown> } {
+  function stubVerifoneCustomerFetch(): {
+    body: () => Record<string, unknown>;
+    authorization: () => string | undefined;
+    callCount: () => number;
+  } {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('access_token')) {
-        return Response.json({ access_token: 'tok', expires_in: 600 });
-      }
+      void input;
       return Response.json({ id: 'cust-1' });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -152,8 +212,24 @@ describe('createCustomer', () => {
         if (!call) throw new Error('createCustomer never called /v2/customer');
         return JSON.parse(String(call[1]?.body)) as Record<string, unknown>;
       },
+      authorization: () => {
+        const call = fetchMock.mock.calls.find(([input]) => String(input).includes('/v2/customer'));
+        if (!call) throw new Error('createCustomer never called /v2/customer');
+        return new Headers(call[1]?.headers).get('Authorization') ?? undefined;
+      },
+      callCount: () => fetchMock.mock.calls.length,
     };
   }
+
+  it('uses Basic Auth directly without an OAuth token request', async () => {
+    const { createCustomer } = await import('../src/lib/verifone');
+    const stub = stubVerifoneCustomerFetch();
+
+    await createCustomer(testEnv(), { email: 'shopper@example.com' });
+
+    expect(stub.callCount()).toBe(1);
+    expect(stub.authorization()).toBe(`Basic ${btoa('user-id:api-key')}`);
+  });
 
   it('sends email_address (not email) and nests name under billing', async () => {
     const { createCustomer } = await import('../src/lib/verifone');
@@ -204,33 +280,5 @@ describe('createCustomer', () => {
     await createCustomer(testEnv(), { email: 'shopper@example.com' });
 
     expect(stub.body().billing).toBeUndefined();
-  });
-});
-
-describe('getVerifoneToken circuit breaker', () => {
-  beforeEach(() => {
-    __resetForTests();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('does not cache a token after a network failure, and opens after repeated failures', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
-    vi.stubGlobal('fetch', fetchMock);
-    const env = testEnv();
-
-    for (let i = 0; i < 5; i++) {
-      await expect(getVerifoneToken(env)).rejects.toThrow();
-    }
-    expect(fetchMock).toHaveBeenCalledTimes(5);
-
-    // Breaker now open for the 'verifone' key: short-circuits without a 6th fetch.
-    await expect(getVerifoneToken(env)).rejects.toThrow('Circuit breaker open');
-    expect(fetchMock).toHaveBeenCalledTimes(5);
-
-    // No broken token was ever cached.
-    expect(await env.CACHE.get('verifone_oauth_token')).toBeNull();
   });
 });

@@ -18,7 +18,6 @@ export interface Env {
   STOREFRONT_URL: string;
   PUBLIC_API_URL?: string;
   VERIFONE_API_BASE: string;
-  VERIFONE_OAUTH_URL: string;
   LANDSBANKINN_API_BASE: string;
   LANDSBANKINN_OAUTH_URL: string;
 
@@ -31,9 +30,8 @@ export interface Env {
   SELLER_PHONE?: string;
 
   // ─── Verifone secrets (wrangler secret put) ──────────────
-  VERIFONE_CLIENT_ID: string;
-  VERIFONE_CLIENT_SECRET: string;
-  VERIFONE_SCOPE: string;
+  VERIFONE_USER_ID: string;
+  VERIFONE_API_KEY: string;
   VERIFONE_ENTITY_ID: string;
   VERIFONE_PAYMENT_CONTRACT_ID: string;
   VERIFONE_3DS_CONTRACT_ID: string;

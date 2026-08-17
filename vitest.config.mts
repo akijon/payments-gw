@@ -9,9 +9,8 @@ export default defineConfig({
       },
       miniflare: {
         bindings: {
-          VERIFONE_CLIENT_ID: 'test-verifone-id',
-          VERIFONE_CLIENT_SECRET: 'test-verifone-secret',
-          VERIFONE_SCOPE: 'checkout',
+          VERIFONE_USER_ID: 'test-verifone-user-id',
+          VERIFONE_API_KEY: 'test-verifone-api-key',
           VERIFONE_ENTITY_ID: 'test-entity',
           VERIFONE_PAYMENT_CONTRACT_ID: 'test-contract',
           VERIFONE_3DS_CONTRACT_ID: 'test-3ds-contract',

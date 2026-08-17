@@ -5,13 +5,12 @@
 | Dependency                     | Client timeout                     | Circuit breaker                                                                | Bulkhead                       | Retry policy     | Status |
 | ------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------ | ------------------------------ | ---------------- | ------ |
 | **Verifone Checkout API**      | 15,000 ms (`UPSTREAM_TIMEOUT_MS`)  | Active — `withCircuitBreaker('verifone')` (in-memory per isolate, best-effort) | Worker concurrency limit       | None (fail fast) | Active |
-| **Verifone OAuth Token**       | 15,000 ms (same constant)          | Active — same `verifone` breaker key                                           | KV token cache                 | None (fail fast) | Active |
 | **Verifone JWKS Fetch**        | 5,000 ms (`JWKS_FETCH_TIMEOUT_MS`) | None                                                                           | In-isolate + KV cache, 1 h TTL | None (fail fast) | Active |
 | **Landsbankinn Acquiring API** | 10,000 ms (`REQUEST_TIMEOUT_MS`)   | Active — `withCircuitBreaker('landsbankinn')` (in-memory per isolate)          | Cron isolation                 | None (fail fast) | Active |
 | **Cloudflare D1 Database**     | Platform default (none set)        | Native D1 binding                                                              | Worker connection pool         | Managed by D1    | Active |
 | **Cloudflare KV Store**        | Platform default (none set)        | Native KV binding                                                              | Worker connection pool         | Managed by KV    | Active |
 
-Timeout constants: `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`, `src/lib/jwks.ts`.
+Verifone requests use the configured user UUID/API key directly via HTTP Basic; there is no token-fetch dependency or token cache. Timeout constants: `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`, `src/lib/jwks.ts`.
 
 **No outbound call is retried.** A failed provider call fails the request immediately: checkout creation returns `502 checkout_provider_unavailable` (`src/usecases/create-checkout.ts`) and the storefront owns the retry, per the `checkout_provider_unavailable` contract in `STOREFRONT_INTEGRATION.md`.
 

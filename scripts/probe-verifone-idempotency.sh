@@ -10,7 +10,7 @@
 #
 # Usage:
 #   set -a; source .dev.vars; set +a
-#   VERIFONE_API_BASE=... VERIFONE_OAUTH_URL=... scripts/probe-verifone-idempotency.sh
+#   VERIFONE_API_BASE=... scripts/probe-verifone-idempotency.sh
 #   scripts/probe-verifone-idempotency.sh --replay   # Q4, reads state from prior run
 set -euo pipefail
 
@@ -20,8 +20,8 @@ if [[ -n "${IRJA_AGENT_SAFE_ENV:-}" ]]; then
   exit 2
 fi
 
-for var in VERIFONE_API_BASE VERIFONE_OAUTH_URL VERIFONE_CLIENT_ID VERIFONE_CLIENT_SECRET \
-           VERIFONE_SCOPE VERIFONE_ENTITY_ID VERIFONE_PAYMENT_CONTRACT_ID VERIFONE_3DS_CONTRACT_ID; do
+for var in VERIFONE_API_BASE VERIFONE_USER_ID VERIFONE_API_KEY VERIFONE_ENTITY_ID \
+           VERIFONE_PAYMENT_CONTRACT_ID VERIFONE_3DS_CONTRACT_ID; do
   if [[ -z "${!var:-}" ]]; then
     echo "Missing $var. Load sandbox credentials first: set -a; source .dev.vars; set +a" >&2
     exit 2
@@ -35,21 +35,21 @@ if [[ "$VERIFONE_API_BASE" != *test* && "${IRJA_ALLOW_NON_SANDBOX:-}" != "1" ]];
 fi
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
+command -v base64 >/dev/null || { echo "base64 is required" >&2; exit 2; }
+
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TEMP_DIR"' EXIT
+AUTH_CONFIG="$TEMP_DIR/curl-auth.conf"
+basic_auth=$(printf '%s:%s' "$VERIFONE_USER_ID" "$VERIFONE_API_KEY" | base64 | tr -d '\n')
+printf 'header = "Authorization: Basic %s"\n' "$basic_auth" > "$AUTH_CONFIG"
+chmod 600 "$AUTH_CONFIG"
+unset basic_auth
 
 AMOUNT_A=${IRJA_PROBE_AMOUNT:-100}
 AMOUNT_B=$((AMOUNT_A * 9))
 RETURN_URL=${IRJA_PROBE_RETURN_URL:-https://example.invalid/api/return}
 STATE_FILE=${IRJA_PROBE_STATE:-/tmp/vfi-probe-state.json}
 
-token() {
-  curl -sS -X POST "$VERIFONE_OAUTH_URL" \
-    -H 'Content-Type: application/x-www-form-urlencoded' \
-    --data-urlencode "grant_type=client_credentials" \
-    --data-urlencode "client_id=$VERIFONE_CLIENT_ID" \
-    --data-urlencode "client_secret=$VERIFONE_CLIENT_SECRET" \
-    --data-urlencode "scope=$VERIFONE_SCOPE" |
-    jq -er .access_token
-}
 
 # body <amount> <merchant_reference>
 body() {
@@ -69,18 +69,15 @@ body() {
 # post <idempotency-key|""> <body> -> "<http_status> <checkout_id>"
 post() {
   local key=$1 payload=$2 args=()
-  args=(-sS -o /tmp/vfi-probe-resp.json -w '%{http_code}'
+  args=(-sS --config "$AUTH_CONFIG" -o "$TEMP_DIR/response.json" -w '%{http_code}'
         -X POST "$VERIFONE_API_BASE/v2/checkout"
-        -H "Authorization: Bearer ***"
         -H 'Content-Type: application/json'
         -H 'Accept: */*')
   [[ -n "$key" ]] && args+=(-H "x-vfi-api-idempotencykey: $key")
   local status
   status=$(curl "${args[@]}" -d "$payload")
-  echo "$status $(jq -r '.id // "-"' /tmp/vfi-probe-resp.json 2>/dev/null || echo '-')"
+  echo "$status $(jq -r '.id // "-"' "$TEMP_DIR/response.json" 2>/dev/null || echo '-')"
 }
-
-TOKEN=$(token)
 
 # --replay: read state from a prior run, replay the EXACT original body, and
 # compare against the original checkout ID.  This isolates key retention from
