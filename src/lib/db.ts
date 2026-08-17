@@ -549,6 +549,26 @@ export async function reclaimCustomerCreationFailure(
   return (result.meta.changes ?? 0) === 1;
 }
 
+export async function renewCheckoutAttemptLease(
+  db: D1Database,
+  input: { keyHash: string; orderId: string },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE checkout_attempts
+       SET updated_at = datetime('now')
+       WHERE key_hash = ? AND order_id = ? AND status = 'processing' AND checkout_url IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM payment_events
+           WHERE payment_events.order_id = checkout_attempts.order_id
+             AND payment_events.event_type = 'checkout_provider_result'
+         )`,
+    )
+    .bind(input.keyHash, input.orderId)
+    .run();
+  return (result.meta.changes ?? 0) === 1;
+}
+
 const STALE_CHECKOUT_ATTEMPT_SECONDS = 45;
 
 /** Reclaim a 'processing' attempt whose provider result was never durably recorded.

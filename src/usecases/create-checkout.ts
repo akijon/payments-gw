@@ -64,6 +64,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     reclaimStaleCheckoutAttempt,
     reclaimCustomerCreationFailure,
     recordCheckoutProviderResult,
+    renewCheckoutAttemptLease,
     setOrderVerifoneCustomerId,
   } = await import('../lib/db');
 
@@ -288,6 +289,14 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
         body: { error: 'Failed to create payment customer', code: 'customer_provider_unavailable' },
       };
     }
+  }
+
+  // Customer lookup + creation can consume two 15-second upstream windows.
+  // Renew ownership before the subsequent checkout POST so a same-key retry
+  // cannot reclaim the 45-second lease while this request still owns it.
+  const leaseRenewed = await renewCheckoutAttemptLease(env.DB, { keyHash, orderId });
+  if (!leaseRenewed) {
+    throw new Error('Checkout attempt lease lost before provider checkout creation');
   }
 
   let checkoutResult: { checkoutId: string; checkoutUrl: string };

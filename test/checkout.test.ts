@@ -578,6 +578,44 @@ describe('POST /api/checkout', () => {
     expect(await conflict.json()).toMatchObject({ code: 'idempotency_conflict' });
   });
 
+  it('renews the attempt lease after serialized customer calls before creating the HPP session', async () => {
+    const idempotencyKey = 'checkout-customer-lease-0001';
+    const { createCustomer, createCheckout } = await import('../src/lib/verifone');
+    vi.mocked(createCustomer).mockImplementationOnce(async () => {
+      await env.DB.prepare("UPDATE checkout_attempts SET updated_at = '2000-01-01 00:00:00'").run();
+      return 'cust-lease-1';
+    });
+    vi.mocked(createCheckout).mockImplementationOnce(async () => {
+      const attempt = await env.DB.prepare(
+        "SELECT key_hash, request_hash, order_id FROM checkout_attempts WHERE status = 'processing'",
+      ).first<{ key_hash: string; request_hash: string; order_id: string }>();
+      expect(attempt).not.toBeNull();
+      const { generateUUID, reclaimStaleCheckoutAttempt } = await import('../src/lib/db');
+      const reclaim = await reclaimStaleCheckoutAttempt(env.DB, {
+        keyHash: attempt!.key_hash,
+        requestHash: attempt!.request_hash,
+        orderId: generateUUID(),
+      });
+      expect(reclaim.reclaimed).toBe(false);
+      expect(reclaim.attempt.order_id).toBe(attempt!.order_id);
+      return { checkoutId: 'chk-lease-1', checkoutUrl: 'https://pay.mock.verifone/chk-lease-1' };
+    });
+
+    const response = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(createCheckout).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a retry while a checkout attempt is still genuinely in flight', async () => {
     const idempotencyKey = 'checkout-inflight-00001';
     const body = JSON.stringify({

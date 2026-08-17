@@ -128,8 +128,8 @@ A separate `wrangler.test.toml` provides test-only API URLs so mocks can be regi
 All secrets are stored in Cloudflare Secrets Store — never in code, `wrangler.toml`, or `.dev.vars` (which is gitignored). Set via:
 
 ```bash
-npx wrangler secret put VERIFONE_CLIENT_ID
-npx wrangler secret put VERIFONE_CLIENT_SECRET
+npx wrangler secret put VERIFONE_USER_ID
+npx wrangler secret put VERIFONE_API_KEY
 # ... see src/types/env.ts for the full list
 ```
 
