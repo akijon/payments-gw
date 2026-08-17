@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import { createOrderWithAccessToken, generateOrderNumber, generateUUID } from '../src/lib/db';
 import type { LineItem } from '../src/types/api';
+import { TERMS_VERSION } from '../src/lib/terms';
 
 // Mock the Verifone API client for checkout kennitala tests.
 vi.mock('../src/lib/verifone', () => ({
@@ -54,6 +55,8 @@ async function createPaidOrder(opts?: { kennitala?: string }): Promise<{ orderId
     customerEmail: 'test@example.is',
     customerName: 'Test Customer',
     buyerKennitala: opts?.kennitala,
+    termsAcceptedAt: new Date().toISOString(),
+    termsVersion: TERMS_VERSION,
     items: makeTestItems(),
     accessToken: token,
   });
@@ -89,6 +92,8 @@ describe('Invoice API endpoint', () => {
       orderNumber: generateOrderNumber(),
       currency: 'ISK',
       amount: 2000,
+      termsAcceptedAt: new Date().toISOString(),
+      termsVersion: TERMS_VERSION,
       items: makeTestItems(),
       accessToken: token,
     });

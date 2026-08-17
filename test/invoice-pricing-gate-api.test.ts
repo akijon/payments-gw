@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
 import { createOrderWithAccessToken, generateUUID, generateOrderNumber } from '../src/lib/db';
 import type { LineItem } from '../src/types/api';
+import { TERMS_VERSION } from '../src/lib/terms';
 
 vi.mock('../src/lib/verifone', () => ({
   getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
@@ -45,6 +46,8 @@ async function seedPaidOrder(opts: {
     amount: opts.amount,
     customerEmail: 'buyer@example.is',
     customerName: 'Test Customer',
+    termsAcceptedAt: new Date().toISOString(),
+    termsVersion: TERMS_VERSION,
     items: [
       {
         product_id: 'TEST-001',

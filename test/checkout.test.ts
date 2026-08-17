@@ -60,6 +60,10 @@ describe('POST /api/checkout', () => {
     expect(order!.status).toBe('checkout_created');
     expect(order!.amount).toBe(18000);
     expect(order!.verifone_checkout_id).toBe('chk-test-1');
+    // Terms-of-sale consent is persisted with the order: the version the buyer
+    // accepted and the moment the acceptance was recorded.
+    expect(order!.terms_version).toBe(TERMS_VERSION);
+    expect(order!.terms_accepted_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
     const { createCheckout } = await import('../src/lib/verifone');
     const request = vi.mocked(createCheckout).mock.calls[0]?.[1];

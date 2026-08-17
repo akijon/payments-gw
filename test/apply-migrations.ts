@@ -315,6 +315,14 @@ ALTER TABLE invoices ADD COLUMN shipping_incl_vat INTEGER NOT NULL DEFAULT 0
   CHECK (shipping_incl_vat >= 0);
 `;
 
+// Copy of migrations/0009_terms_acceptance.sql (DRAFT — not applied anywhere
+// except the inlined test runtime schema, which needs the columns for
+// createOrderWithAccessToken to write terms consent).
+const MIGRATION_TERMS_ACCEPTANCE = `
+ALTER TABLE orders ADD COLUMN terms_accepted_at TEXT;
+ALTER TABLE orders ADD COLUMN terms_version TEXT;
+`;
+
 function splitSql(sql: string): string[] {
   return sql
     .split(';')
@@ -339,6 +347,7 @@ beforeAll(async () => {
     { name: '0012_failure_recovery_states.sql', queries: MIGRATION_0012_QUERIES },
     { name: '0013_incident_tracking.sql', queries: splitSql(MIGRATION_0013) },
     { name: '0014_shipping_cost.sql', queries: splitSql(MIGRATION_0014) },
+    { name: '0009_terms_acceptance.sql', queries: splitSql(MIGRATION_TERMS_ACCEPTANCE) },
   ];
   await applyD1Migrations(env.DB, migrations);
 });

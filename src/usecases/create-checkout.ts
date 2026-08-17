@@ -79,6 +79,8 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       customer_email: input.customerEmail ?? null,
       customer_name: input.customerName ?? null,
       buyer_kennitala: input.buyerKennitala ?? null,
+      terms_accepted: input.termsAccepted,
+      terms_version: input.termsVersion,
     }),
   );
   const claim = await claimCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
@@ -182,6 +184,8 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       customerEmail: input.customerEmail,
       customerName: input.customerName,
       buyerKennitala: input.buyerKennitala,
+      termsAcceptedAt: new Date().toISOString(),
+      termsVersion: input.termsVersion,
       items,
       accessToken: orderAccessToken,
     });

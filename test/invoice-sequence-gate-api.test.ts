@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
 import { createOrderWithAccessToken } from '../src/lib/db';
 import type { LineItem } from '../src/types/api';
+import { TERMS_VERSION } from '../src/lib/terms';
 
 // Matches test/invoice-api.test.ts: the Worker entrypoint pulls in the Verifone
 // client at module load, which cannot initialize under the test runtime.
@@ -34,6 +35,8 @@ async function seedPaidOrder(id: string, token: string): Promise<void> {
     amount: 10000, // VAT-inclusive charged amount
     customerEmail: 'buyer@example.is',
     customerName: 'Test Customer',
+    termsAcceptedAt: new Date().toISOString(),
+    termsVersion: TERMS_VERSION,
     items: [
       {
         product_id: 'TEST-001',
