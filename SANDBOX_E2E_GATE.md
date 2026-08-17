@@ -6,7 +6,7 @@ Run this only against the dedicated sandbox Worker and sandbox Verifone/Landsban
 
 - [ ] Replace the `products` seed rows with the approved merchant catalog before any production migration. The repository currently contains development fixtures only; no real catalog was supplied, so it was deliberately not invented.
 - [ ] Configure all ten Worker secrets in the sandbox Worker.
-- [ ] Apply migrations through `0008_payment_method.sql` to the sandbox D1 database using `npm run db:migrate:sandbox`.
+- [ ] Apply migrations through `0015_terms_acceptance.sql` (all migrations in `migrations/`, currently `0001`–`0015`) to the sandbox D1 database using `npm run db:migrate:sandbox`. Stopping at `0008` leaves `orders` without `terms_accepted_at`/`terms_version` (`0015`) and `shipping_incl_vat` (`0014`), which the checkout insert (`src/lib/db.ts`) and pricing-integrity check (`src/lib/payment-integrity.ts`) require — checkout and invoicing fail immediately on an `0008`-only database.
 - [ ] Set the sandbox webhook URL to `https://<sandbox-worker>/api/webhooks/verifone` — the Worker's own origin, deliberately not `PUBLIC_API_URL`. Webhooks are server-to-server, so there is no browser origin to match, and delivery should not depend on the storefront being up. The storefront proxy would in fact preserve the body byte-exactly (it forwards the `Request` unchanged over a service binding, so detached-JWS verification would still pass) — the reason to keep webhooks direct is one less hop and one less dependency on the payment-confirmation path, not signature safety. Browser returns are the opposite case: they must use `PUBLIC_API_URL` (see `DEPLOYMENT_GATE.md`).
 - [ ] Obtain a vendor-signed Verifone fixture or perform the test from Verifone Sandbox.
 
