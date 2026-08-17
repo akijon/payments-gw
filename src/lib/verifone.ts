@@ -111,6 +111,7 @@ export function buildVerifoneCheckoutRequest(
       threed_secure: {
         enabled: true,
         threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
+        transaction_mode: 'S',
         ...(params.authenticationIndicator ? { authentication_indicator: params.authenticationIndicator } : {}),
         ...(params.challengeIndicator ? { challenge_indicator: params.challengeIndicator } : {}),
       },

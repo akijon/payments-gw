@@ -36,11 +36,18 @@ const CARD_ONLY_CONFIG = {
     threed_secure: {
       enabled: true,
       threeds_contract_id: '3ds-contract-1',
+      transaction_mode: 'S' as const,
     },
   },
 };
 
 describe('buildVerifoneCheckoutRequest', () => {
+  it('identifies HPP browser checkouts as computer-device 3DS transactions', () => {
+    const body = buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS });
+
+    expect(body.configurations.card.threed_secure?.transaction_mode).toBe('S');
+  });
+
   it('emits card-only configurations when no wallet contracts are set (baseline)', () => {
     const body = buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS });
 
@@ -203,6 +210,7 @@ describe('buildVerifoneCheckoutRequest', () => {
     expect(body.configurations.card.threed_secure).toEqual({
       enabled: true,
       threeds_contract_id: '3ds-contract-1',
+      transaction_mode: 'S',
       authentication_indicator: '01',
       challenge_indicator: '04',
     });

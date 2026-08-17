@@ -85,6 +85,7 @@ export interface VerifoneCardConfiguration {
   threed_secure?: {
     enabled: boolean;
     threeds_contract_id: string;
+    transaction_mode: 'M' | 'P' | 'R' | 'S' | 'T';
     authentication_indicator?: ThreeDSAuthenticationIndicator;
     challenge_indicator?: ThreeDSChallengeIndicator;
   };
