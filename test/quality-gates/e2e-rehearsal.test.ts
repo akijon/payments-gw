@@ -87,7 +87,11 @@ describe('Sandbox rehearsal (mocked) — SANDBOX_E2E_GATE.md checklist', () => {
     const checkoutResp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ items: [{ product_id: 'LOPAPEYSA-M', quantity: 1 }] }),
+      body: JSON.stringify({
+        items: [{ product_id: 'LOPAPEYSA-M', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: '2026-08-17',
+      }),
     });
     expect(checkoutResp.status).toBe(200);
     const checkoutBody = (await checkoutResp.json()) as {

@@ -46,6 +46,8 @@ describe('Security Regression Detection', () => {
               unit_price: 1,
             },
           ],
+          terms_accepted: true,
+          terms_version: '2026-08-17',
         }),
       });
 
@@ -68,6 +70,8 @@ describe('Security Regression Detection', () => {
               total_amount: 100,
             },
           ],
+          terms_accepted: true,
+          terms_version: '2026-08-17',
         }),
       });
 
@@ -87,6 +91,8 @@ describe('Security Regression Detection', () => {
               quantity: 1,
             },
           ],
+          terms_accepted: true,
+          terms_version: '2026-08-17',
         }),
       });
 
@@ -101,6 +107,8 @@ describe('Security Regression Detection', () => {
           { product_id: 'HOODIE-BLK-M', quantity: 2 },
           { product_id: 'TSHIRT-WHT-L', quantity: 1 },
         ],
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       };
 
       const response = await SELF.fetch('http://localhost/api/checkout', {
@@ -213,7 +221,7 @@ describe('Security Regression Detection', () => {
         const response = await SELF.fetch('http://localhost/api/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-          body: JSON.stringify({ items: [item] }),
+          body: JSON.stringify({ items: [item], terms_accepted: true, terms_version: '2026-08-17' }),
         });
 
         expect([400, 422]).toContain(response.status);

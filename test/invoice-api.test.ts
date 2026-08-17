@@ -269,6 +269,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_email: 'buyer@example.com',
         buyer_kennitala: '010130-3019', // valid checksum
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(200);
@@ -281,6 +283,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         buyer_kennitala: '010130-3029', // invalid checksum (should be 1, digit is 2)
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(422);
@@ -300,6 +304,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         buyer_kennitala: '0000000699',
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(422);
@@ -319,6 +325,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(200);

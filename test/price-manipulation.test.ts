@@ -31,6 +31,8 @@ describe('Price Manipulation Security Tests', () => {
         },
       ],
       customer_email: 'attacker@example.com',
+      terms_accepted: true,
+      terms_version: '2026-08-17',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
@@ -57,6 +59,8 @@ describe('Price Manipulation Security Tests', () => {
         },
       ],
       customer_email: 'attacker@example.com',
+      terms_accepted: true,
+      terms_version: '2026-08-17',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
@@ -80,6 +84,8 @@ describe('Price Manipulation Security Tests', () => {
         },
       ],
       customer_email: 'attacker@example.com',
+      terms_accepted: true,
+      terms_version: '2026-08-17',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
@@ -98,6 +104,8 @@ describe('Price Manipulation Security Tests', () => {
     const secureRequest = {
       items: [{ product_id: 'HOODIE-BLK-M', quantity: 1 }],
       customer_email: 'buyer@example.com',
+      terms_accepted: true,
+      terms_version: '2026-08-17',
     };
 
     const response = await SELF.fetch('http://example.com/api/checkout', {
@@ -123,6 +131,8 @@ describe('Price Manipulation Security Tests', () => {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, unit_price: 1 }],
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(response.status).toBe(400);

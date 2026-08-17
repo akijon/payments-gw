@@ -3,6 +3,7 @@ import type { Env } from '../types/env';
 import { enforceCheckoutRateLimit } from '../lib/rate-limit';
 import { acceptsJson, readTextBody, RequestBodyTooLargeError } from '../lib/http';
 import { isValidKennitala } from '../lib/invoice-computation';
+import { validateTermsInput } from '../lib/terms';
 import { createCheckoutUseCase } from '../usecases/create-checkout';
 
 const MAX_CHECKOUT_BODY_BYTES = 16 * 1024;
@@ -44,6 +45,8 @@ checkoutRoute.post('/', async (c) => {
     customer_email?: unknown;
     customer_name?: unknown;
     buyer_kennitala?: unknown;
+    terms_accepted?: unknown;
+    terms_version?: unknown;
     unit_price?: unknown;
     total_amount?: unknown;
     amount?: unknown;
@@ -62,7 +65,7 @@ checkoutRoute.post('/', async (c) => {
     return c.json({ error: 'Invalid JSON body', code: 'validation' }, 400);
   }
 
-  const allowedFields = new Set(['items', 'customer_email', 'customer_name', 'buyer_kennitala']);
+  const allowedFields = new Set(['items', 'customer_email', 'customer_name', 'buyer_kennitala', 'terms_accepted', 'terms_version']);
   const unexpectedFields = Object.keys(body).filter((field) => !allowedFields.has(field));
   if (unexpectedFields.length > 0) {
     const moneyFields = unexpectedFields.filter((field) => ['amount', 'unit_price', 'total_amount'].includes(field));
@@ -130,12 +133,23 @@ checkoutRoute.post('/', async (c) => {
     buyerKennitala = ktDigits;
   }
 
+  // Terms-of-sale acceptance is a server-side contract, not a storefront
+  // checkbox: the checkout is refused unless the buyer explicitly accepted
+  // the exact TERMS_VERSION the storefront displayed.
+  const termsResult = validateTermsInput(body.terms_accepted, body.terms_version);
+  if (!termsResult.ok) {
+    return c.json({ error: termsResult.message, code: termsResult.code }, 400);
+  }
+
   const outcome = await createCheckoutUseCase(c.env, {
     idempotencyKey,
     items: body.items,
     customerEmail,
     customerName,
     buyerKennitala,
+    termsAccepted: true,
+    // Narrowed by validateTermsInput above: ok implies version === TERMS_VERSION.
+    termsVersion: body.terms_version as string,
     publicApiOrigin,
     executionCtx: c.executionCtx,
   });

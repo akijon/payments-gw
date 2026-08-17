@@ -15,6 +15,9 @@ export interface CreateCheckoutInput {
   customerEmail?: string;
   customerName?: string;
   buyerKennitala?: string;
+  /** Terms-of-sale consent, already validated by the route adapter. */
+  termsAccepted: true;
+  termsVersion: string;
   publicApiOrigin: string;
   /** Workers execution context — used for ctx.waitUntil on fire-and-forget
    *  background work so the runtime doesn't kill the promise when the

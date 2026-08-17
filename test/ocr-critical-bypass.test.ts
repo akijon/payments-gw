@@ -36,6 +36,8 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       body: JSON.stringify({
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 2, unit_price: 1, total_amount: 2 }],
         customer_email: 'attacker@example.com',
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
 
@@ -51,6 +53,8 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       body: JSON.stringify({
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, total_amount: 1 }],
         customer_email: 'attacker@example.com',
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
 
@@ -65,6 +69,8 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       body: JSON.stringify({
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, unit_price: 0, total_amount: 0 }],
         customer_email: 'attacker@example.com',
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
 
@@ -79,6 +85,8 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       body: JSON.stringify({
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 2 }],
         customer_email: 'buyer@example.com',
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
 
