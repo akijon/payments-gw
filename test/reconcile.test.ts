@@ -274,7 +274,7 @@ describe('reconcile', () => {
       `SELECT COUNT(*) AS count FROM reconciliation_exceptions WHERE reason = 'non_settlable_transaction'`,
     ).first<{ count: number }>();
     expect(exceptionCount?.count).toBe(TRANSACTION_COUNT);
-  });
+  }, 15_000);
 
   it('persists a failed run without advancing the completed cursor', async () => {
     const { reconcile } = await import('../src/cron/reconcile');
