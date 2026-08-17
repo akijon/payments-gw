@@ -103,7 +103,7 @@ export async function enhancedCreateCheckout(
           code: 'kennitala_required_b2b',
           fallback_options: {
             document_type: customerValidation.classification.documentType,
-            threshold_amount: Math.round(totalAmount / 100),
+            threshold_amount: totalAmount,
             message: 'Provide valid 10-digit Icelandic kennitala to continue',
           },
         },
@@ -365,7 +365,7 @@ export async function enhancedProcessReturn(
             params.orderId,
             order.amount,
             gatewayAmount,
-            100, // 1 ISK = 100 aurar
+            1, // the rounding-drift branch is entered only at a 1 króna discrepancy
             reconciliation.status,
             reconciliation.adjustedAmount! - order.amount,
             reconciliation.adjustmentReason,

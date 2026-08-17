@@ -32,7 +32,7 @@ export class PricingIntegrityError extends Error {
 }
 
 export interface PricingComponents {
-  /** What the payment gateway actually charged, in minor units. */
+  /** What the payment gateway actually charged, in whole krónur (ISK major units). */
   chargedAmount: number;
   subtotalExclVat: number;
   totalVat: number;

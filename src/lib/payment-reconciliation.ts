@@ -35,9 +35,11 @@ export function reconcilePaymentAmounts(params: {
     return { status: 'exact_match' };
   }
 
-  // Rounding drift (±1 ISK) - apply correction
-  if (discrepancy === 100) {
-    // 100 aurar = 1 ISK
+  // Rounding drift (±1 ISK) - apply correction.
+  // Amounts are whole krónur, so 1 króna of drift is a discrepancy of 1.
+  // This previously tested `=== 100`, which silently absorbed a 100 kr
+  // mismatch as if it were a one-króna rounding difference.
+  if (discrepancy === 1) {
     const correction = gatewayAuthorizedAmount - cartGrossTotal;
 
     // Find the largest 24% VAT item to absorb the drift
@@ -56,7 +58,7 @@ export function reconcilePaymentAmounts(params: {
       return {
         status: 'rounding_adjusted',
         adjustedAmount: gatewayAuthorizedAmount,
-        adjustmentReason: `1-krona rounding drift (${correction > 0 ? '+' : ''}${correction / 100} ISK) absorbed by largest VAT item`,
+        adjustmentReason: `1-krona rounding drift (${correction > 0 ? '+' : ''}${correction} ISK) absorbed by largest VAT item`,
         largestVatLineIndex: largestVatIndex,
       };
     }
@@ -65,7 +67,7 @@ export function reconcilePaymentAmounts(params: {
   // Discrepancy > 1 ISK indicates tampering or cache drift
   return {
     status: 'TRANSACTION_ABORTED_PRICE_MISMATCH',
-    adjustmentReason: `Price mismatch: expected ${cartGrossTotal / 100} ISK, authorized ${gatewayAuthorizedAmount / 100} ISK (drift: ${discrepancy / 100} ISK)`,
+    adjustmentReason: `Price mismatch: expected ${cartGrossTotal} ISK, authorized ${gatewayAuthorizedAmount} ISK (drift: ${discrepancy} ISK)`,
   };
 }
 
@@ -122,8 +124,9 @@ export function validateMonetaryIntegrity(params: {
       computedTotal += item.total_amount;
     }
 
-    if (Math.abs(computedTotal - amount) > 100) {
-      // Allow ±1 ISK for rounding
+    if (Math.abs(computedTotal - amount) > 1) {
+      // Allow ±1 ISK for rounding. Amounts are whole krónur, so the tolerance
+      // is 1, not 100 — the old bound accepted a 100 kr sum mismatch.
       return { valid: false, error: 'Line item totals do not sum to order amount' };
     }
   }

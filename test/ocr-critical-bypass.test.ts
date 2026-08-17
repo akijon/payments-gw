@@ -29,7 +29,7 @@ beforeEach(async () => {
 describe('ocr critical finding — consistent-price bypass attempt', () => {
   it('rejects internally CONSISTENT unit_price x quantity === total_amount', async () => {
     // Passes Math.trunc equality: 1 * 2 === 2. If 143-159 were the only
-    // gate, this would sail through and buy a hoodie for 2 aurar.
+    // gate, this would sail through and buy a hoodie for 2 kr.
     const res = await SELF.fetch('https://example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },

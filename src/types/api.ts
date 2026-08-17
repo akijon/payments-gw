@@ -17,8 +17,8 @@ export interface LineItem {
   product_id: string;
   name: string;
   quantity: number;
-  unit_price: number; // minor units — from catalog
-  total_amount: number; // minor units — unit_price * quantity
+  unit_price: number; // whole krónur (ISK major units) — from catalog
+  total_amount: number; // whole krónur (ISK major units) — unit_price * quantity
   sku?: string; // same as product_id when set
 }
 
@@ -49,14 +49,14 @@ export interface Order {
   order_number: string;
   status: OrderStatus;
   currency: string;
-  amount: number; // minor units — the charged total, inclusive of shipping
+  amount: number; // whole krónur (ISK major units) — the charged total, inclusive of shipping
   customer_email?: string;
   customer_name?: string;
   billing?: CheckoutBillingDetails;
   verifone_customer_id?: string;
   buyer_kennitala?: string; // Icelandic national ID — required for B2B invoices
   items: LineItem[];
-  /** Shipping charged with this order, VAT-inclusive minor units. */
+  /** Shipping charged with this order, VAT-inclusive, in whole krónur (ISK major units). */
   shipping_incl_vat: number;
   payment_method?: PaymentMethod; // Determined from Verifone response after payment
   verifone_checkout_id?: string;

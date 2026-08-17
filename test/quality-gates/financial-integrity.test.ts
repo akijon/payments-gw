@@ -1,3 +1,17 @@
+/**
+ * NOTE ON UNITS: this service stores and charges ISK in **major units** (whole
+ * krónur). `amount: 18000` is 18.000 kr. The "aurar / minor units" framing in
+ * the cases below is historical and does NOT describe the gateway's data; the
+ * assertions are unit-agnostic integer arithmetic and pass either way.
+ *
+ * NOTE ON SCOPE: these cases import nothing from `src/` — they assert
+ * JavaScript's own integer and floating-point behaviour, not this codebase's
+ * financial logic. Treat them as documentation of the arithmetic rules the
+ * code follows, not as coverage of it. Real coverage of the money paths lives
+ * in `test/pricing-integrity.test.ts`, `test/invoice-computation.test.ts`, and
+ * `test/payment-reconciliation.test.ts`.
+ */
+
 import { describe, it, expect } from 'vitest';
 
 describe('Financial Integrity Validation', () => {

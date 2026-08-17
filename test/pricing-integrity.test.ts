@@ -10,7 +10,7 @@
  * from the customer. Without it, an invoice can be finalized for an amount the
  * customer was never charged, which is exactly the mismatch Skatturinn audits.
  *
- * All amounts are minor units (aurar). Shipping is VAT-inclusive, matching the
+ * All amounts are whole krónur (ISK major units). Shipping is VAT-inclusive, matching the
  * VAT-inclusive catalog pricing the rest of the system uses.
  */
 import { describe, it, expect } from 'vitest';
@@ -87,7 +87,7 @@ describe('Pricing integrity gate', () => {
   });
 
   describe('rejects non-integer and negative components', () => {
-    it('blocks a fractional charge (aurar must be whole)', () => {
+    it('blocks a fractional charge (krónur must be whole)', () => {
       expect(() => assertPricingIntegrity({ ...BALANCED, chargedAmount: 10_000.5 })).toThrow(PricingIntegrityError);
     });
 

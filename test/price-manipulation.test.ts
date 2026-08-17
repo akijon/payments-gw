@@ -24,7 +24,7 @@ describe('Price Manipulation Security Tests', () => {
       ...TEST_CHECKOUT_CUSTOMER,
       items: [
         {
-          name: 'Expensive Product (RRP: 50000 aurar)',
+          name: 'Expensive Product (RRP: 50.000 kr)',
           quantity: 1,
           unit_price: 1,
           total_amount: 1,

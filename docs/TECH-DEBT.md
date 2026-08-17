@@ -44,7 +44,7 @@
 
 ## Adopted Conventions
 
-- **Monetary Values:** Integer minor units only (aurar for ISK). No floating-point arithmetic.
+- **Monetary Values:** Integer whole krónur (ISK major units) only. No floating-point arithmetic.
 - **Error Types:** Throw structured domain errors extending `DomainError` with explicit error codes.
 - **State Transitions:** D1 order status updates must specify expected current state in `WHERE` clauses to prevent status regression.
 - **Secrets:** Isolated in Cloudflare Secrets Store. Never logged or committed.

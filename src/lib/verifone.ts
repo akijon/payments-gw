@@ -19,7 +19,7 @@ const MAX_DYNAMIC_DESCRIPTOR_LENGTH = 25;
 
 export interface BuildVerifoneCheckoutRequestParams {
   orderNumber: string;
-  amount: number; // minor units
+  amount: number; // whole krónur (ISK major units)
   currency: string; // ISO 4217 uppercase, e.g. "ISK"
   returnUrl: string;
   /**

@@ -33,17 +33,17 @@ export interface InvoiceLineItem {
   sku: string;
   description: string;
   quantity: number;
-  unit_price_excl_vat: number; // minor units
+  unit_price_excl_vat: number; // whole krónur (ISK major units)
   vat_rate: VatRate;
-  vat_amount: number; // minor units
-  total_incl_vat: number; // minor units
+  vat_amount: number; // whole krónur (ISK major units)
+  total_incl_vat: number; // whole krónur (ISK major units)
 }
 
 /** VAT breakdown by rate. */
 export interface VatBreakdownEntry {
   rate: VatRate;
-  taxable_base: number; // minor units, excl. VAT
-  vat_amount: number; // minor units
+  taxable_base: number; // whole krónur (ISK major units), excl. VAT
+  vat_amount: number; // whole krónur (ISK major units)
 }
 
 /** Full invoice payload matching the JSON schema. */
