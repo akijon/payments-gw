@@ -22,6 +22,11 @@ export interface BuildVerifoneCheckoutRequestParams {
   amount: number; // minor units
   currency: string; // ISO 4217 uppercase, e.g. "ISK"
   returnUrl: string;
+  /**
+   * Storefront URL Verifone redirects to when the shopper cancels the HPP.
+   * Verifone exposes no `cancel_url`; `shop_url` is the documented equivalent.
+   */
+  shopUrl?: string;
   /** Pre-created Verifone customer ID (see createCustomer) to attach for richer 3DS customer_details. */
   customer?: string;
   /** Short text shown on the cardholder's bank statement. Verifone caps this at 25 chars. */
@@ -43,6 +48,15 @@ export function buildVerifoneAuthorization(env: Env): string {
     throw new Error('Invalid Verifone Basic Auth credentials');
   }
   return `Basic ${btoa(`${userId}:${apiKey}`)}`;
+}
+
+/** Absolute, parseable, and https — the only shape safe to hand a shopper as a redirect target. */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** Non-empty after trim → usable contract ID; otherwise treat as unset. */
@@ -102,6 +116,9 @@ export function buildVerifoneCheckoutRequest(
   if (params.dynamicDescriptor && params.dynamicDescriptor.length > MAX_DYNAMIC_DESCRIPTOR_LENGTH) {
     throw new Error(`dynamicDescriptor exceeds Verifone's ${MAX_DYNAMIC_DESCRIPTOR_LENGTH}-character limit`);
   }
+  if (params.shopUrl !== undefined && !isHttpsUrl(params.shopUrl)) {
+    throw new Error('shopUrl must be an absolute https URL');
+  }
 
   const configurations: VerifoneCheckoutConfigurations = {
     card: {
@@ -138,6 +155,7 @@ export function buildVerifoneCheckoutRequest(
     amount: params.amount,
     merchant_reference: params.orderNumber,
     return_url: params.returnUrl,
+    ...(params.shopUrl ? { shop_url: params.shopUrl } : {}),
     interaction_type: 'HPP',
     ...(params.customer ? { customer: params.customer } : {}),
     configurations,

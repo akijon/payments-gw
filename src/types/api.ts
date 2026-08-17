@@ -123,6 +123,8 @@ export interface VerifoneCheckoutRequest {
   amount: number;
   merchant_reference: string;
   return_url: string;
+  /** Where Verifone sends the shopper if they cancel the HPP. Verifone has no `cancel_url`. */
+  shop_url?: string;
   interaction_type: 'HPP' | 'IFRAME' | 'PAYMENT_LINK';
   customer?: string;
   configurations: VerifoneCheckoutConfigurations;

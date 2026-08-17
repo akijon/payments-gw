@@ -323,6 +323,24 @@ describe('POST /api/checkout', () => {
     }
   });
 
+  it('sends STOREFRONT_URL as shop_url so a cancelled HPP returns the buyer to the store', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+    expect(resp.status).toBe(200);
+
+    const { createCheckout } = await import('../src/lib/verifone');
+    const request = vi.mocked(createCheckout).mock.calls.at(-1)?.[1];
+    expect(request?.shopUrl).toBe(env.STOREFRONT_URL);
+  });
+
   it('returns 400 for empty items', async () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',

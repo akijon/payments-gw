@@ -90,6 +90,12 @@ The storefront should:
 
 The API returns `409 idempotency_conflict` if a key is reused with different checkout data. A completed retry returns the original order and checkout URL rather than creating a second payment session.
 
+## Cancelled checkout
+
+Verifone's Checkout API has no `cancel_url`. The documented field for an abandoned HPP is `shop_url`, which the gateway sets from `STOREFRONT_URL` on every checkout. A shopper who cancels lands back on the storefront root, not on `/api/return`.
+
+A cancel produces no provider event, so the order stays non-terminal (`checkout_created`) until it expires or the buyer retries. The storefront should treat a buyer arriving back at the store with a live `irja:order-session` as an abandoned attempt, not a failure: keep the cart, and mint a new idempotency key only once the cart contents actually change.
+
 ## Return and status recovery
 
 The HPP browser return is navigation, not proof of payment. Query parameters such as `status`, `transaction_id`, and `checkout_id` are untrusted.

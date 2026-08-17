@@ -306,6 +306,10 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       amount: totalAmount,
       currency,
       returnUrl: returnUrl.toString(),
+      // Cancel path: Verifone has no `cancel_url`, so `shop_url` is where an
+      // abandoned HPP sends the buyer. The order stays non-terminal and the
+      // storefront's normal poll/retry flow picks it up.
+      ...(env.STOREFRONT_URL ? { shopUrl: env.STOREFRONT_URL } : {}),
       ...(verifoneCustomerId ? { customer: verifoneCustomerId } : {}),
     });
   } catch (error) {

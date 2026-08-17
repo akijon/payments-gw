@@ -221,4 +221,33 @@ describe('buildVerifoneCheckoutRequest', () => {
       buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, dynamicDescriptor: 'x'.repeat(26) }),
     ).toThrow(/25-character limit/);
   });
+
+  // Verifone has no `cancel_url`. `shop_url` is the documented field for the
+  // "shopper abandoned the HPP" path; without it the HPP cancel affordance
+  // leaves the buyer stranded on Verifone with no route back to the store.
+  it('sets shop_url as the cancel destination when a storefront URL is provided', () => {
+    const body = buildVerifoneCheckoutRequest(testEnv(), {
+      ...BASE_PARAMS,
+      shopUrl: 'https://irja.khalipa.net/',
+    });
+
+    expect(body.shop_url).toBe('https://irja.khalipa.net/');
+  });
+
+  it('omits shop_url when no storefront URL is provided', () => {
+    const body = buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS });
+
+    expect(body.shop_url).toBeUndefined();
+    expect('shop_url' in body).toBe(false);
+  });
+
+  it('rejects a non-HTTPS shop_url so a cancel cannot downgrade the buyer to plaintext', () => {
+    expect(() => buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, shopUrl: 'http://irja.khalipa.net/' })).toThrow(
+      /shopUrl/,
+    );
+  });
+
+  it('rejects an unparseable shop_url', () => {
+    expect(() => buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, shopUrl: 'not-a-url' })).toThrow(/shopUrl/);
+  });
 });
