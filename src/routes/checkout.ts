@@ -3,7 +3,7 @@ import type { Env } from '../types/env';
 import { enforceCheckoutRateLimit } from '../lib/rate-limit';
 import { acceptsJson, readTextBody, RequestBodyTooLargeError } from '../lib/http';
 import { isValidKennitala } from '../lib/invoice-computation';
-import { validateTermsInput } from '../lib/terms';
+import { validateTermsAcceptance } from '../lib/terms';
 import { createCheckoutUseCase } from '../usecases/create-checkout';
 
 const MAX_CHECKOUT_BODY_BYTES = 16 * 1024;
@@ -140,12 +140,13 @@ checkoutRoute.post('/', async (c) => {
     buyerKennitala = ktDigits;
   }
 
-  // Terms-of-sale acceptance is a server-side contract, not a storefront
-  // checkbox: the checkout is refused unless the buyer explicitly accepted
-  // the exact TERMS_VERSION the storefront displayed.
-  const termsResult = validateTermsInput(body.terms_accepted, body.terms_version);
-  if (!termsResult.ok) {
-    return c.json({ error: termsResult.message, code: termsResult.code }, 400);
+  // Every request must explicitly claim acceptance. The current-version check
+  // happens in createCheckoutUseCase after it has identified an exact replay:
+  // a retry must return a checkout already created under the older accepted
+  // version, while every new/reclaimed attempt must accept the current version.
+  const termsAcceptance = validateTermsAcceptance(body.terms_accepted);
+  if (!termsAcceptance.ok) {
+    return c.json({ error: termsAcceptance.message, code: termsAcceptance.code }, 400);
   }
 
   const outcome = await createCheckoutUseCase(c.env, {
@@ -155,8 +156,7 @@ checkoutRoute.post('/', async (c) => {
     customerName,
     buyerKennitala,
     termsAccepted: true,
-    // Narrowed by validateTermsInput above: ok implies version === TERMS_VERSION.
-    termsVersion: body.terms_version as string,
+    termsVersion: body.terms_version,
     publicApiOrigin,
     executionCtx: c.executionCtx,
   });

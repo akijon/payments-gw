@@ -11,7 +11,7 @@ export const TERMS_VERSION = '2026-08-17';
 export type TermsValidationResult =
   { ok: true } | { ok: false; code: 'terms_not_accepted' | 'terms_version_mismatch'; message: string };
 
-export function validateTermsInput(value: unknown, version: unknown): TermsValidationResult {
+export function validateTermsAcceptance(value: unknown): TermsValidationResult {
   if (value !== true) {
     return {
       ok: false,
@@ -19,6 +19,10 @@ export function validateTermsInput(value: unknown, version: unknown): TermsValid
       message: 'Terms of sale must be accepted',
     };
   }
+  return { ok: true };
+}
+
+export function validateTermsVersion(version: unknown): TermsValidationResult {
   if (version !== TERMS_VERSION) {
     return {
       ok: false,
@@ -27,4 +31,10 @@ export function validateTermsInput(value: unknown, version: unknown): TermsValid
     };
   }
   return { ok: true };
+}
+
+export function validateTermsInput(value: unknown, version: unknown): TermsValidationResult {
+  const acceptance = validateTermsAcceptance(value);
+  if (!acceptance.ok) return acceptance;
+  return validateTermsVersion(version);
 }

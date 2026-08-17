@@ -8,6 +8,7 @@
 
 import type { Env } from '../types/env';
 import { CatalogError, resolveCheckoutItems } from '../lib/catalog';
+import { TERMS_VERSION, validateTermsVersion } from '../lib/terms';
 
 export interface CreateCheckoutInput {
   idempotencyKey: string;
@@ -15,9 +16,10 @@ export interface CreateCheckoutInput {
   customerEmail?: string;
   customerName?: string;
   buyerKennitala?: string;
-  /** Terms-of-sale consent, already validated by the route adapter. */
+  /** Terms-of-sale consent; acceptance is validated by the route adapter and
+   * the version is validated after idempotency lookup to preserve exact replays. */
   termsAccepted: true;
-  termsVersion: string;
+  termsVersion: unknown;
   publicApiOrigin: string;
   /** Workers execution context — used for ctx.waitUntil on fire-and-forget
    *  background work so the runtime doesn't kill the promise when the
@@ -84,6 +86,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     }),
   );
   const claim = await claimCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
+  const termsVersion = validateTermsVersion(input.termsVersion);
 
   if (!claim.claimed) {
     if (claim.attempt.request_hash !== requestHash) {
@@ -144,6 +147,13 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       }
     }
 
+    // A version bump must never create a new checkout or reclaim an incomplete
+    // old attempt. Completed and recoverable provider replays returned above
+    // remain valid because they use the consent already recorded with that order.
+    if (!termsVersion.ok) {
+      return { status: 400, body: { error: termsVersion.message, code: termsVersion.code } };
+    }
+
     // No checkout_url or recoverable provider result yet: either genuinely in
     // flight, previously failed, or the provider result was never committed
     // locally. The lease prevents a permanent key wedge, but provider
@@ -158,6 +168,11 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       };
     }
     // Reclaimed: fall through and create a fresh checkout for `orderId`.
+  }
+
+  if (!termsVersion.ok) {
+    await failCheckoutAttempt(env.DB, keyHash);
+    return { status: 400, body: { error: termsVersion.message, code: termsVersion.code } };
   }
 
   // Only reached for a genuinely new (or reclaimed) attempt — a pure replay hit
@@ -185,7 +200,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       customerName: input.customerName,
       buyerKennitala: input.buyerKennitala,
       termsAcceptedAt: new Date().toISOString(),
-      termsVersion: input.termsVersion,
+      termsVersion: TERMS_VERSION,
       items,
       accessToken: orderAccessToken,
     });

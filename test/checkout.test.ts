@@ -112,6 +112,51 @@ describe('POST /api/checkout', () => {
     expect(await resp.json()).toMatchObject({ code: 'terms_version_mismatch' });
   });
 
+  it('replays a completed checkout after a terms-version bump', async () => {
+    const idempotencyKey = 'checkout-terms-bump-replay-0001';
+    const oldTermsVersion = '2026-08-16';
+    const items = [{ product_id: 'TEST-001', quantity: 1 }];
+    const { hashIdempotencyValue } = await import('../src/lib/db');
+    const keyHash = await hashIdempotencyValue(idempotencyKey);
+    const requestHash = await hashIdempotencyValue(
+      JSON.stringify({
+        items,
+        customer_email: null,
+        customer_name: null,
+        buyer_kennitala: null,
+        terms_accepted: true,
+        terms_version: oldTermsVersion,
+      }),
+    );
+    const orderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+    await env.DB.prepare(
+      `INSERT INTO orders (id, order_number, status, currency, amount, items_json, terms_accepted_at, terms_version)
+       VALUES (?, 'IRJA-TERMS-REPLAY', 'checkout_created', 'ISK', 1000, '[]', '2026-08-16T00:00:00.000Z', ?)`,
+    )
+      .bind(orderId, oldTermsVersion)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO checkout_attempts (key_hash, request_hash, order_id, status, checkout_url)
+       VALUES (?, ?, ?, 'completed', 'https://pay.mock.verifone/old-terms-checkout')`,
+    )
+      .bind(keyHash, requestHash, orderId)
+      .run();
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ items, terms_accepted: true, terms_version: oldTermsVersion }),
+    });
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toMatchObject({
+      order_id: orderId,
+      checkout_url: 'https://pay.mock.verifone/old-terms-checkout',
+      idempotent_replay: true,
+    });
+  });
+
   it("rejects checkout when terms_accepted is the string 'true' (no type coercion)", async () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
