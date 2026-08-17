@@ -7,6 +7,7 @@
  */
 
 import type { Env } from '../types/env';
+import type { CheckoutBillingDetails } from '../types/api';
 import { CatalogError, resolveCheckoutItems } from '../lib/catalog';
 import { TERMS_VERSION, validateTermsVersion } from '../lib/terms';
 
@@ -15,16 +16,13 @@ export interface CreateCheckoutInput {
   items: unknown;
   customerEmail?: string;
   customerName?: string;
+  billing?: CheckoutBillingDetails;
   buyerKennitala?: string;
   /** Terms-of-sale consent; acceptance is validated by the route adapter and
    * the version is validated after idempotency lookup to preserve exact replays. */
   termsAccepted: true;
   termsVersion: unknown;
   publicApiOrigin: string;
-  /** Workers execution context — used for ctx.waitUntil on fire-and-forget
-   *  background work so the runtime doesn't kill the promise when the
-   *  response is sent. */
-  executionCtx?: Pick<ExecutionContext, 'waitUntil'>;
 }
 
 interface CreateCheckoutSuccessBody {
@@ -64,8 +62,9 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
     getOrderById,
     hashIdempotencyValue,
     reclaimStaleCheckoutAttempt,
+    reclaimCustomerCreationFailure,
     recordCheckoutProviderResult,
-    logPaymentEvent,
+    setOrderVerifoneCustomerId,
   } = await import('../lib/db');
 
   const orderId = generateUUID();
@@ -75,21 +74,38 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
   // rename/reprice/deactivation between the original attempt and a replay must
   // not turn a legitimate idempotent replay into a false conflict or catalog
   // error further down.
-  const requestHash = await hashIdempotencyValue(
-    JSON.stringify({
-      items: input.items,
-      customer_email: input.customerEmail ?? null,
-      customer_name: input.customerName ?? null,
-      buyer_kennitala: input.buyerKennitala ?? null,
-      terms_accepted: input.termsAccepted,
-      terms_version: input.termsVersion,
-    }),
-  );
+  const requestPayload = {
+    items: input.items,
+    customer_email: input.customerEmail ?? null,
+    customer_name: input.customerName ?? null,
+    billing: input.billing ?? null,
+    buyer_kennitala: input.buyerKennitala ?? null,
+    terms_accepted: input.termsAccepted,
+    terms_version: input.termsVersion,
+  };
+  const requestHash = await hashIdempotencyValue(JSON.stringify(requestPayload));
+  // Compatibility for exact replays created before billing became mandatory.
+  // New attempts always use the current fingerprint and fail the customer gate.
+  const legacyRequestHash = input.billing
+    ? null
+    : await hashIdempotencyValue(
+        JSON.stringify({
+          items: input.items,
+          customer_email: input.customerEmail ?? null,
+          customer_name: input.customerName ?? null,
+          buyer_kennitala: input.buyerKennitala ?? null,
+          terms_accepted: input.termsAccepted,
+          terms_version: input.termsVersion,
+        }),
+      );
   const claim = await claimCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
   const termsVersion = validateTermsVersion(input.termsVersion);
 
   if (!claim.claimed) {
-    if (claim.attempt.request_hash !== requestHash) {
+    const requestMatches =
+      claim.attempt.request_hash === requestHash ||
+      (legacyRequestHash !== null && claim.attempt.request_hash === legacyRequestHash);
+    if (!requestMatches) {
       return {
         status: 409,
         body: { error: 'Idempotency-Key was already used for a different checkout', code: 'idempotency_conflict' },
@@ -154,12 +170,27 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       return { status: 400, body: { error: termsVersion.message, code: termsVersion.code } };
     }
 
+    if (!input.customerEmail || !input.billing) {
+      return {
+        status: 400,
+        body: {
+          error: 'customer_email and complete billing details are required for 3DS checkout',
+          code: 'customer_details_required',
+        },
+      };
+    }
+
     // No checkout_url or recoverable provider result yet: either genuinely in
     // flight, previously failed, or the provider result was never committed
     // locally. The lease prevents a permanent key wedge, but provider
     // idempotency/reconciliation is still required because an accepted provider
     // request can exist without a locally stored result.
-    const reclaim = await reclaimStaleCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
+    const customerFailureReclaimed =
+      claim.attempt.status === 'failed' &&
+      (await reclaimCustomerCreationFailure(env.DB, { keyHash, requestHash, orderId }));
+    const reclaim = customerFailureReclaimed
+      ? { reclaimed: true }
+      : await reclaimStaleCheckoutAttempt(env.DB, { keyHash, requestHash, orderId });
     if (!reclaim.reclaimed) {
       return {
         status: 409,
@@ -173,6 +204,17 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
   if (!termsVersion.ok) {
     await failCheckoutAttempt(env.DB, keyHash);
     return { status: 400, body: { error: termsVersion.message, code: termsVersion.code } };
+  }
+
+  if (!input.customerEmail || !input.billing) {
+    await failCheckoutAttempt(env.DB, keyHash);
+    return {
+      status: 400,
+      body: {
+        error: 'customer_email and complete billing details are required for 3DS checkout',
+        code: 'customer_details_required',
+      },
+    };
   }
 
   // Only reached for a genuinely new (or reclaimed) attempt — a pure replay hit
@@ -198,6 +240,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       amount: totalAmount,
       customerEmail: input.customerEmail,
       customerName: input.customerName,
+      billing: input.billing,
       buyerKennitala: input.buyerKennitala,
       termsAcceptedAt: new Date().toISOString(),
       termsVersion: TERMS_VERSION,
@@ -215,30 +258,36 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
 
   const { createCheckout, createCustomer } = await import('../lib/verifone');
 
-  // Fire customer creation as a background task via ctx.waitUntil so the
-  // runtime keeps the promise alive after the response is sent. The customer
-  // ID is NOT attached to this checkout — by the time createCheckout runs,
-  // the promise hasn't settled yet and the ID would be undefined. Customer
-  // creation is purely for future-order enrichment and must never block or
-  // fail the payment path. The separate circuit breaker (verifone-customer
-  // vs verifone) ensures slow customer API doesn't trip the payment circuit.
-  if (input.customerEmail && input.executionCtx) {
-    const customerPromise = createCustomer(env, {
-      email: input.customerEmail,
-      ...(input.customerName ? { firstName: input.customerName.split(' ')[0] } : {}),
-      ...(input.customerName ? { lastName: input.customerName.split(' ').slice(1).join(' ') || undefined } : {}),
-    }).catch(async (error) => {
-      console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
-      await logPaymentEvent(env.DB, {
-        id: generateUUID(),
-        orderId,
-        eventType: 'customer_creation_failed',
-        source: 'verifone_api',
-        rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
-        verified: false,
+  let verifoneCustomerId: string | undefined;
+  if (input.customerEmail && input.billing) {
+    try {
+      verifoneCustomerId = await createCustomer(env, {
+        email: input.customerEmail,
+        firstName: input.billing.first_name,
+        lastName: input.billing.last_name,
+        billingAddress1: input.billing.address_1,
+        billingCity: input.billing.city,
+        billingCountryCode: input.billing.country_code,
+        billingPostalCode: input.billing.postal_code,
+        ...(input.billing.state ? { billingState: input.billing.state } : {}),
+        ...(input.billing.phone ? { billingPhone: input.billing.phone } : {}),
       });
-    });
-    input.executionCtx.waitUntil(customerPromise);
+      await setOrderVerifoneCustomerId(env.DB, orderId, verifoneCustomerId);
+    } catch (error) {
+      console.error(JSON.stringify({ message: 'Verifone createCustomer failed', order_id: orderId }));
+      const failed = await failCheckoutCreationAtomically(env.DB, {
+        keyHash,
+        orderId,
+        eventId: generateUUID(),
+        eventType: 'customer_creation_failed',
+        rawPayload: JSON.stringify({ error_type: error instanceof Error ? error.name : 'unknown' }),
+      });
+      if (!failed) throw new Error('Checkout order changed before customer failure persistence');
+      return {
+        status: 502,
+        body: { error: 'Failed to create payment customer', code: 'customer_provider_unavailable' },
+      };
+    }
   }
 
   let checkoutResult: { checkoutId: string; checkoutUrl: string };
@@ -248,6 +297,7 @@ export async function createCheckoutUseCase(env: Env, input: CreateCheckoutInput
       amount: totalAmount,
       currency,
       returnUrl: returnUrl.toString(),
+      ...(verifoneCustomerId ? { customer: verifoneCustomerId } : {}),
     });
   } catch (error) {
     console.error(JSON.stringify({ message: 'Verifone checkout creation failed', order_id: orderId }));

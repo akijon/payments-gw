@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
+import { TEST_CHECKOUT_CUSTOMER } from './fixtures/checkout-customer';
 
 vi.mock('../src/lib/verifone', () => ({
   createCheckout: vi.fn().mockResolvedValue({
@@ -33,6 +34,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 2, unit_price: 1, total_amount: 2 }],
         customer_email: 'attacker@example.com',
         terms_accepted: true,
@@ -50,6 +52,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, total_amount: 1 }],
         customer_email: 'attacker@example.com',
         terms_accepted: true,
@@ -66,6 +69,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, unit_price: 0, total_amount: 0 }],
         customer_email: 'attacker@example.com',
         terms_accepted: true,
@@ -82,6 +86,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 2 }],
         customer_email: 'buyer@example.com',
         terms_accepted: true,

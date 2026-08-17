@@ -195,41 +195,118 @@ export async function createCheckout(
 
 export interface CreateCustomerParams {
   email: string;
-  firstName?: string;
-  lastName?: string;
-  billingAddress1?: string;
-  billingCity?: string;
-  billingCountryCode?: string;
-  billingPostalCode?: string;
+  firstName: string;
+  lastName: string;
+  billingAddress1: string;
+  billingCity: string;
+  billingCountryCode: string;
+  billingPostalCode: string;
   billingState?: string;
+  billingPhone?: string;
+}
+
+interface VerifoneCustomerRecord {
+  id?: unknown;
+  entity_id?: unknown;
+  email_address?: unknown;
+  billing?: Partial<VerifoneBilling>;
+}
+
+function rsqlQuoted(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function isMatchingCustomer(record: VerifoneCustomerRecord, env: Env, params: CreateCustomerParams): boolean {
+  const billing = record.billing;
+  return (
+    typeof record.id === 'string' &&
+    record.id.length > 0 &&
+    record.id.length <= 256 &&
+    record.entity_id === env.VERIFONE_ENTITY_ID &&
+    typeof record.email_address === 'string' &&
+    record.email_address.toLowerCase() === params.email.toLowerCase() &&
+    billing?.first_name === params.firstName &&
+    billing.last_name === params.lastName &&
+    billing.address_1 === params.billingAddress1 &&
+    billing.city === params.billingCity &&
+    billing.country_code === params.billingCountryCode &&
+    billing.postal_code === params.billingPostalCode &&
+    (billing.state ?? undefined) === params.billingState &&
+    (billing.phone ?? undefined) === params.billingPhone
+  );
 }
 
 export async function createCustomer(env: Env, params: CreateCustomerParams): Promise<string> {
   if (!params.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email)) {
     throw new Error('Invalid customer email');
   }
+  if (
+    !params.firstName?.trim() ||
+    params.firstName.length > 22 ||
+    !params.lastName?.trim() ||
+    params.lastName.length > 22 ||
+    !params.billingAddress1?.trim() ||
+    params.billingAddress1.length > 40 ||
+    !params.billingCity?.trim() ||
+    params.billingCity.length > 28 ||
+    !params.billingPostalCode?.trim() ||
+    params.billingPostalCode.length > 10 ||
+    !/^[A-Z]{2}$/.test(params.billingCountryCode) ||
+    (params.billingState !== undefined && (!params.billingState.trim() || params.billingState.length > 35)) ||
+    (params.billingPhone !== undefined && !/^\+?[0-9]{7,25}$/.test(params.billingPhone))
+  ) {
+    throw new Error('Missing or invalid Verifone customer billing fields');
+  }
   const authorization = buildVerifoneAuthorization(env);
+  const customerEndpoint = `${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`;
+
+  // Customer creation has no documented idempotency key. Recover accepted-but-
+  // timed-out creates and reuse prior exact profiles before issuing another POST.
+  const listUrl = new URL(customerEndpoint);
+  listUrl.searchParams.set(
+    'search',
+    `email_address==${rsqlQuoted(params.email)};entity_id==${rsqlQuoted(env.VERIFONE_ENTITY_ID)}`,
+  );
+  listUrl.searchParams.set('page_size', '50');
+  listUrl.searchParams.set('page_number', '1');
+  const listResponse = await withCircuitBreaker('verifone-customer', () =>
+    fetch(listUrl.toString(), {
+      method: 'GET',
+      headers: { Authorization: authorization, Accept: 'application/json' },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }),
+  );
+  if (!listResponse.ok) throw upstreamError('Verifone listCustomers', listResponse);
+  const customers = (await listResponse.json()) as unknown;
+  if (!Array.isArray(customers) || customers.length > 50) {
+    throw new Error('Verifone listCustomers returned an invalid response');
+  }
+  const existing = customers.find((customer) => isMatchingCustomer(customer as VerifoneCustomerRecord, env, params));
+  if (existing && typeof (existing as VerifoneCustomerRecord).id === 'string') {
+    return (existing as VerifoneCustomerRecord).id as string;
+  }
 
   // Verifone's Customer API schema has no top-level first_name/last_name or
   // email fields — those live at email_address and billing.first_name/last_name.
   const billing: VerifoneBilling = {
-    ...(params.firstName ? { first_name: params.firstName } : {}),
-    ...(params.lastName ? { last_name: params.lastName } : {}),
-    ...(params.billingAddress1 ? { address_1: params.billingAddress1 } : {}),
-    ...(params.billingCity ? { city: params.billingCity } : {}),
-    ...(params.billingCountryCode ? { country_code: params.billingCountryCode } : {}),
-    ...(params.billingPostalCode ? { postal_code: params.billingPostalCode } : {}),
+    first_name: params.firstName,
+    last_name: params.lastName,
+    address_1: params.billingAddress1,
+    city: params.billingCity,
+    country_code: params.billingCountryCode,
+    postal_code: params.billingPostalCode,
     ...(params.billingState ? { state: params.billingState } : {}),
+    ...(params.billingPhone ? { phone: params.billingPhone } : {}),
   };
 
   const body = {
     entity_id: env.VERIFONE_ENTITY_ID,
     email_address: params.email,
-    ...(Object.keys(billing).length > 0 ? { billing } : {}),
+    billing,
   };
 
   const resp = await withCircuitBreaker('verifone-customer', () =>
-    fetch(`${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`, {
+    fetch(customerEndpoint, {
       method: 'POST',
       headers: {
         Authorization: authorization,

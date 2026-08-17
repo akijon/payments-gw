@@ -32,6 +32,18 @@ export interface CheckoutItemRequest {
   quantity: number;
 }
 
+/** Billing identity required by Verifone Customer + HPP 3DS. */
+export interface CheckoutBillingDetails {
+  first_name: string;
+  last_name: string;
+  address_1: string;
+  city: string;
+  country_code: string;
+  postal_code: string;
+  state?: string;
+  phone?: string;
+}
+
 export interface Order {
   id: string;
   order_number: string;
@@ -40,6 +52,8 @@ export interface Order {
   amount: number; // minor units — the charged total, inclusive of shipping
   customer_email?: string;
   customer_name?: string;
+  billing?: CheckoutBillingDetails;
+  verifone_customer_id?: string;
   buyer_kennitala?: string; // Icelandic national ID — required for B2B invoices
   items: LineItem[];
   /** Shipping charged with this order, VAT-inclusive minor units. */
@@ -75,6 +89,7 @@ export interface VerifoneBilling {
   country_code?: string;
   postal_code?: string;
   state?: string;
+  phone?: string;
 }
 
 export interface VerifoneCardConfiguration {

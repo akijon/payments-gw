@@ -5,6 +5,7 @@ import { acceptsJson, readTextBody, RequestBodyTooLargeError } from '../lib/http
 import { isValidKennitala } from '../lib/invoice-computation';
 import { validateTermsAcceptance } from '../lib/terms';
 import { createCheckoutUseCase } from '../usecases/create-checkout';
+import type { CheckoutBillingDetails } from '../types/api';
 
 const MAX_CHECKOUT_BODY_BYTES = 16 * 1024;
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._:-]{16,128}$/;
@@ -44,6 +45,7 @@ checkoutRoute.post('/', async (c) => {
     items?: unknown;
     customer_email?: unknown;
     customer_name?: unknown;
+    billing?: unknown;
     buyer_kennitala?: unknown;
     terms_accepted?: unknown;
     terms_version?: unknown;
@@ -69,6 +71,7 @@ checkoutRoute.post('/', async (c) => {
     'items',
     'customer_email',
     'customer_name',
+    'billing',
     'buyer_kennitala',
     'terms_accepted',
     'terms_version',
@@ -115,6 +118,74 @@ checkoutRoute.post('/', async (c) => {
     }
   }
 
+  let billing: CheckoutBillingDetails | undefined;
+  if (body.billing !== undefined && body.billing !== null) {
+    if (typeof body.billing !== 'object' || Array.isArray(body.billing)) {
+      return c.json({ error: 'Invalid billing details', code: 'customer_details_invalid' }, 400);
+    }
+    const rawBilling = body.billing as Record<string, unknown>;
+    const allowedBillingFields = new Set([
+      'first_name',
+      'last_name',
+      'address_1',
+      'city',
+      'country_code',
+      'postal_code',
+      'state',
+      'phone',
+    ]);
+    if (Object.keys(rawBilling).some((field) => !allowedBillingFields.has(field))) {
+      return c.json({ error: 'Unexpected billing field', code: 'customer_details_invalid' }, 400);
+    }
+
+    const text = (field: string, maxLength: number, required: boolean): string | undefined => {
+      const value = rawBilling[field];
+      if (value === undefined || value === null) return required ? '' : undefined;
+      if (typeof value !== 'string') return '';
+      const normalized = value.trim();
+      const hasControlCharacter = Array.from(normalized).some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return codePoint <= 0x1f || codePoint === 0x7f;
+      });
+      if (!normalized || normalized.length > maxLength || hasControlCharacter) return '';
+      return normalized;
+    };
+
+    const firstName = text('first_name', 22, true);
+    const lastName = text('last_name', 22, true);
+    const address1 = text('address_1', 40, true);
+    const city = text('city', 28, true);
+    const countryCode = text('country_code', 2, true)?.toUpperCase();
+    const postalCode = text('postal_code', 10, true);
+    const state = text('state', 35, false);
+    const phone = text('phone', 25, false);
+    if (
+      !firstName ||
+      !lastName ||
+      !address1 ||
+      !city ||
+      !countryCode ||
+      !postalCode ||
+      !/^[A-Z]{2}$/.test(countryCode)
+    ) {
+      return c.json({ error: 'Missing or invalid mandatory billing fields', code: 'customer_details_invalid' }, 400);
+    }
+    if (phone && !/^\+?[0-9]{7,25}$/.test(phone)) {
+      return c.json({ error: 'Invalid billing phone', code: 'customer_details_invalid' }, 400);
+    }
+    billing = {
+      first_name: firstName,
+      last_name: lastName,
+      address_1: address1,
+      city,
+      country_code: countryCode,
+      postal_code: postalCode,
+      ...(state ? { state } : {}),
+      ...(phone ? { phone } : {}),
+    };
+    customerName ??= `${firstName} ${lastName}`;
+  }
+
   // The provider must return to the gateway, not directly to the storefront.
   // PUBLIC_API_URL is required when the storefront and Worker use different origins;
   // otherwise the origin serving this request is the correct callback origin.
@@ -154,11 +225,11 @@ checkoutRoute.post('/', async (c) => {
     items: body.items,
     customerEmail,
     customerName,
+    billing,
     buyerKennitala,
     termsAccepted: true,
     termsVersion: body.terms_version,
     publicApiOrigin,
-    executionCtx: c.executionCtx,
   });
   return c.json(outcome.body, outcome.status, 'headers' in outcome ? outcome.headers : undefined);
 });

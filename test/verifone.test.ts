@@ -31,6 +31,16 @@ function testEnv(): Env {
   } as unknown as Env;
 }
 
+const CUSTOMER_PARAMS = {
+  email: 'shopper@example.com',
+  firstName: 'Jón',
+  lastName: 'Jónsson',
+  billingAddress1: 'Laugavegur 1',
+  billingCity: 'Reykjavík',
+  billingCountryCode: 'IS',
+  billingPostalCode: '101',
+} as const;
+
 describe('buildVerifoneAuthorization', () => {
   it('encodes the Verifone user UUID and API key as RFC 7617 Basic credentials', () => {
     const env = {
@@ -200,15 +210,18 @@ describe('createCustomer', () => {
     authorization: () => string | undefined;
     callCount: () => number;
   } {
-    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init) => {
       void input;
+      if (init?.method === 'GET') return Response.json([]);
       return Response.json({ id: 'cust-1' });
     });
     vi.stubGlobal('fetch', fetchMock);
 
     return {
       body: () => {
-        const call = fetchMock.mock.calls.find(([input]) => String(input).includes('/v2/customer'));
+        const call = fetchMock.mock.calls.find(
+          ([input, init]) => String(input).includes('/v2/customer') && init?.method === 'POST',
+        );
         if (!call) throw new Error('createCustomer never called /v2/customer');
         return JSON.parse(String(call[1]?.body)) as Record<string, unknown>;
       },
@@ -221,13 +234,78 @@ describe('createCustomer', () => {
     };
   }
 
+  it('rejects missing mandatory 3DS billing fields before any network request', async () => {
+    const { createCustomer } = await import('../src/lib/verifone');
+    const stub = stubVerifoneCustomerFetch();
+
+    await expect(createCustomer(testEnv(), { email: 'shopper@example.com' } as never)).rejects.toThrow(
+      'Missing or invalid Verifone customer billing fields',
+    );
+    expect(stub.callCount()).toBe(0);
+  });
+
+  it('reuses an exact existing Verifone customer instead of creating duplicate PII', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.method).toBe('GET');
+      return Response.json([
+        {
+          id: 'cust-existing',
+          entity_id: 'entity-1',
+          email_address: CUSTOMER_PARAMS.email,
+          billing: {
+            first_name: CUSTOMER_PARAMS.firstName,
+            last_name: CUSTOMER_PARAMS.lastName,
+            address_1: CUSTOMER_PARAMS.billingAddress1,
+            city: CUSTOMER_PARAMS.billingCity,
+            country_code: CUSTOMER_PARAMS.billingCountryCode,
+            postal_code: CUSTOMER_PARAMS.billingPostalCode,
+          },
+        },
+      ]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { createCustomer } = await import('../src/lib/verifone');
+
+    await expect(createCustomer(testEnv(), { ...CUSTOMER_PARAMS })).resolves.toBe('cust-existing');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse a customer whose optional billing data differs', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      if (init?.method === 'GET') {
+        return Response.json([
+          {
+            id: 'cust-stale',
+            entity_id: 'entity-1',
+            email_address: CUSTOMER_PARAMS.email,
+            billing: {
+              first_name: CUSTOMER_PARAMS.firstName,
+              last_name: CUSTOMER_PARAMS.lastName,
+              address_1: CUSTOMER_PARAMS.billingAddress1,
+              city: CUSTOMER_PARAMS.billingCity,
+              country_code: CUSTOMER_PARAMS.billingCountryCode,
+              postal_code: CUSTOMER_PARAMS.billingPostalCode,
+              state: 'OLD',
+            },
+          },
+        ]);
+      }
+      return Response.json({ id: 'cust-new' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { createCustomer } = await import('../src/lib/verifone');
+
+    await expect(createCustomer(testEnv(), { ...CUSTOMER_PARAMS, billingState: 'NEW' })).resolves.toBe('cust-new');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('uses Basic Auth directly without an OAuth token request', async () => {
     const { createCustomer } = await import('../src/lib/verifone');
     const stub = stubVerifoneCustomerFetch();
 
-    await createCustomer(testEnv(), { email: 'shopper@example.com' });
+    await createCustomer(testEnv(), { ...CUSTOMER_PARAMS });
 
-    expect(stub.callCount()).toBe(1);
+    expect(stub.callCount()).toBe(2);
     expect(stub.authorization()).toBe(`Basic ${btoa('user-id:api-key')}`);
   });
 
@@ -236,9 +314,7 @@ describe('createCustomer', () => {
     const stub = stubVerifoneCustomerFetch();
 
     const id = await createCustomer(testEnv(), {
-      email: 'shopper@example.com',
-      firstName: 'Jón',
-      lastName: 'Jónsson',
+      ...CUSTOMER_PARAMS,
     });
 
     expect(id).toBe('cust-1');
@@ -246,7 +322,14 @@ describe('createCustomer', () => {
     expect(body.email_address).toBe('shopper@example.com');
     expect(body.email).toBeUndefined();
     expect(body.first_name).toBeUndefined();
-    expect(body.billing).toEqual({ first_name: 'Jón', last_name: 'Jónsson' });
+    expect(body.billing).toEqual({
+      first_name: 'Jón',
+      last_name: 'Jónsson',
+      address_1: 'Laugavegur 1',
+      city: 'Reykjavík',
+      country_code: 'IS',
+      postal_code: '101',
+    });
   });
 
   it('includes optional billing address fields when provided', async () => {
@@ -254,12 +337,7 @@ describe('createCustomer', () => {
     const stub = stubVerifoneCustomerFetch();
 
     await createCustomer(testEnv(), {
-      email: 'shopper@example.com',
-      firstName: 'Jón',
-      lastName: 'Jónsson',
-      billingAddress1: 'Laugavegur 1',
-      billingCity: 'Reykjavík',
-      billingCountryCode: 'IS',
+      ...CUSTOMER_PARAMS,
       billingPostalCode: '101',
     });
 
@@ -271,14 +349,5 @@ describe('createCustomer', () => {
       country_code: 'IS',
       postal_code: '101',
     });
-  });
-
-  it('omits billing entirely when no name or address fields are given', async () => {
-    const { createCustomer } = await import('../src/lib/verifone');
-    const stub = stubVerifoneCustomerFetch();
-
-    await createCustomer(testEnv(), { email: 'shopper@example.com' });
-
-    expect(stub.body().billing).toBeUndefined();
   });
 });

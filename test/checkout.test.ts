@@ -20,6 +20,18 @@ vi.mock('../src/lib/verifone', () => ({
   parseCheckoutResult: vi.fn(),
 }));
 
+const TEST_CUSTOMER = {
+  customer_email: 'shopper@example.com',
+  billing: {
+    first_name: 'Jón',
+    last_name: 'Jónsson',
+    address_1: 'Laugavegur 1',
+    city: 'Reykjavík',
+    country_code: 'IS',
+    postal_code: '101',
+  },
+} as const;
+
 beforeEach(async () => {
   vi.clearAllMocks();
   await env.DB.exec(
@@ -28,11 +40,121 @@ beforeEach(async () => {
 });
 
 describe('POST /api/checkout', () => {
+  it('creates, persists, and attaches a 3DS-ready Verifone customer before checkout', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        customer_email: 'shopper@example.com',
+        billing: {
+          first_name: 'Jón',
+          last_name: 'Jónsson',
+          address_1: 'Laugavegur 1',
+          city: 'Reykjavík',
+          country_code: 'IS',
+          postal_code: '101',
+        },
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+
+    expect(resp.status).toBe(200);
+    const data = (await resp.json()) as { order_id: string };
+    const { createCustomer, createCheckout } = await import('../src/lib/verifone');
+    expect(vi.mocked(createCustomer)).toHaveBeenCalledWith(env, {
+      email: 'shopper@example.com',
+      firstName: 'Jón',
+      lastName: 'Jónsson',
+      billingAddress1: 'Laugavegur 1',
+      billingCity: 'Reykjavík',
+      billingCountryCode: 'IS',
+      billingPostalCode: '101',
+    });
+    expect(vi.mocked(createCheckout).mock.calls[0]?.[1].customer).toBe('cust-mock-1');
+
+    const order = await env.DB.prepare(
+      `SELECT billing_first_name, billing_last_name, billing_address_1, billing_city,
+              billing_country_code, billing_postal_code, verifone_customer_id
+       FROM orders WHERE id = ?`,
+    )
+      .bind(data.order_id)
+      .first<Record<string, unknown>>();
+    expect(order).toMatchObject({
+      billing_first_name: 'Jón',
+      billing_last_name: 'Jónsson',
+      billing_address_1: 'Laugavegur 1',
+      billing_city: 'Reykjavík',
+      billing_country_code: 'IS',
+      billing_postal_code: '101',
+      verifone_customer_id: 'cust-mock-1',
+    });
+  });
+
+  it('fails atomically and safely retries customer creation with the same idempotency key', async () => {
+    const { createCustomer, createCheckout } = await import('../src/lib/verifone');
+    vi.mocked(createCustomer).mockRejectedValueOnce(new Error('provider unavailable'));
+    const idempotencyKey = 'customer-creation-retry-0001';
+    const body = JSON.stringify({
+      ...TEST_CUSTOMER,
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+
+    expect(resp.status).toBe(502);
+    expect(await resp.json()).toMatchObject({ code: 'customer_provider_unavailable' });
+    expect(createCheckout).not.toHaveBeenCalled();
+    const order = await env.DB.prepare('SELECT status FROM orders').first<{ status: string }>();
+    expect(order?.status).toBe('failed');
+    const attempt = await env.DB.prepare('SELECT status FROM checkout_attempts').first<{ status: string }>();
+    expect(attempt?.status).toBe('failed');
+    const event = await env.DB.prepare(
+      "SELECT event_type FROM payment_events WHERE event_type = 'customer_creation_failed'",
+    ).first<{ event_type: string }>();
+    expect(event?.event_type).toBe('customer_creation_failed');
+
+    const retry = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body,
+    });
+    expect(retry.status).toBe(200);
+    expect(createCustomer).toHaveBeenCalledTimes(2);
+    expect(createCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires email and complete billing identity for every 3DS checkout', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        customer_email: undefined,
+        billing: undefined,
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+
+    expect(resp.status).toBe(400);
+    expect(await resp.json()).toMatchObject({ code: 'customer_details_required' });
+  });
+
   it('creates order and returns checkout_url + order_id from catalog prices', async () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'LOPAPEYSA-M', quantity: 1 }],
         customer_email: 'test@example.com',
         terms_accepted: true,
@@ -86,6 +208,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         terms_accepted: false,
         terms_version: '2026-08-17',
@@ -101,6 +224,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         terms_accepted: true,
         terms_version: '1970-01-01',
@@ -161,6 +285,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         terms_accepted: 'true',
         terms_version: '2026-08-17',
@@ -181,6 +306,7 @@ describe('POST /api/checkout', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({
+          ...TEST_CUSTOMER,
           items: [{ product_id: 'TEST-001', quantity: 1 }],
           terms_accepted: true,
           terms_version: TERMS_VERSION,
@@ -220,6 +346,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [
           { product_id: 'HOODIE-BLK-M', quantity: 2 }, // 8900 * 2
           { product_id: 'TSHIRT-WHT-L', quantity: 1 }, // 4500
@@ -246,6 +373,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ sku: 'TEST-001', quantity: 3 }],
         terms_accepted: true,
         terms_version: TERMS_VERSION,
@@ -266,6 +394,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [
           { product_id: 'TEST-001', quantity: 1 },
           { product_id: 'EUR-TEST-001', quantity: 1 },
@@ -288,6 +417,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         terms_accepted: true,
         terms_version: TERMS_VERSION,
@@ -302,6 +432,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_name: 'x'.repeat(16 * 1024),
         terms_accepted: true,
@@ -319,6 +450,7 @@ describe('POST /api/checkout', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        ...TEST_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         terms_accepted: true,
         terms_version: TERMS_VERSION,
@@ -335,6 +467,7 @@ describe('POST /api/checkout', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
+          ...TEST_CUSTOMER,
           items: [{ product_id: 'TEST-001', quantity: 1 }],
           terms_accepted: true,
           terms_version: TERMS_VERSION,
@@ -367,6 +500,7 @@ describe('POST /api/checkout', () => {
 
     const idempotencyKey = 'checkout-catalog-drift-0001';
     const body = JSON.stringify({
+      ...TEST_CUSTOMER,
       items: [{ product_id: 'CATALOG-DRIFT-TEST', quantity: 1 }],
       terms_accepted: true,
       terms_version: TERMS_VERSION,
@@ -410,6 +544,7 @@ describe('POST /api/checkout', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
+          ...TEST_CUSTOMER,
           items: [{ product_id: 'TEST-001', quantity }],
           terms_accepted: true,
           terms_version: TERMS_VERSION,
@@ -422,9 +557,31 @@ describe('POST /api/checkout', () => {
     expect(await conflict.json()).toMatchObject({ code: 'idempotency_conflict' });
   });
 
+  it('rejects reuse of an idempotency key when billing identity changes', async () => {
+    const idempotencyKey = 'checkout-billing-conflict-0001';
+    const send = (address: string) =>
+      SELF.fetch('https://test.example.com/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({
+          ...TEST_CUSTOMER,
+          billing: { ...TEST_CUSTOMER.billing, address_1: address },
+          items: [{ product_id: 'TEST-001', quantity: 1 }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
+      });
+
+    expect((await send('Laugavegur 1')).status).toBe(200);
+    const conflict = await send('Laugavegur 2');
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ code: 'idempotency_conflict' });
+  });
+
   it('rejects a retry while a checkout attempt is still genuinely in flight', async () => {
     const idempotencyKey = 'checkout-inflight-00001';
     const body = JSON.stringify({
+      ...TEST_CUSTOMER,
       items: [{ product_id: 'TEST-001', quantity: 1 }],
       terms_accepted: true,
       terms_version: TERMS_VERSION,
@@ -456,6 +613,7 @@ describe('POST /api/checkout', () => {
   it('recovers a persisted provider result after finalization rollback without creating a second HPP session', async () => {
     const idempotencyKey = 'checkout-finalization-recovery-0001';
     const body = JSON.stringify({
+      ...TEST_CUSTOMER,
       items: [{ product_id: 'TEST-001', quantity: 1 }],
       terms_accepted: true,
       terms_version: TERMS_VERSION,
@@ -514,6 +672,9 @@ describe('POST /api/checkout', () => {
     const checkoutInput: CreateCheckoutInput = {
       idempotencyKey,
       items: [{ product_id: 'TEST-001', quantity: 1 }],
+      customerEmail: TEST_CUSTOMER.customer_email,
+      customerName: `${TEST_CUSTOMER.billing.first_name} ${TEST_CUSTOMER.billing.last_name}`,
+      billing: TEST_CUSTOMER.billing,
       termsAccepted: true,
       termsVersion: TERMS_VERSION,
       publicApiOrigin: 'https://test.example.com',
@@ -573,6 +734,7 @@ describe('POST /api/checkout', () => {
     // forever — once the lease window has passed, a retry should succeed fresh.
     const idempotencyKey = 'checkout-stale-00001';
     const body = JSON.stringify({
+      ...TEST_CUSTOMER,
       items: [{ product_id: 'TEST-001', quantity: 1 }],
       terms_accepted: true,
       terms_version: TERMS_VERSION,
@@ -610,93 +772,5 @@ describe('POST /api/checkout', () => {
 
     const orders = await env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first<{ count: number }>();
     expect(orders?.count).toBe(2); // original order left orphaned at 'checkout_created', new one created
-  });
-
-  it('attempts a Verifone customer creation when an email is given (best-effort async)', async () => {
-    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({
-        items: [{ product_id: 'TEST-001', quantity: 1 }],
-        customer_email: 'buyer@example.com',
-        customer_name: 'Jón Jónsson',
-        terms_accepted: true,
-        terms_version: TERMS_VERSION,
-      }),
-    });
-
-    expect(resp.status).toBe(200);
-    const { createCustomer } = await import('../src/lib/verifone');
-    expect(vi.mocked(createCustomer)).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ email: 'buyer@example.com', firstName: 'Jón', lastName: 'Jónsson' }),
-    );
-  });
-
-  it('does not create a Verifone customer with no email', async () => {
-    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({
-        items: [{ product_id: 'TEST-001', quantity: 1 }],
-        terms_accepted: true,
-        terms_version: TERMS_VERSION,
-      }),
-    });
-
-    expect(resp.status).toBe(200);
-    const { createCustomer } = await import('../src/lib/verifone');
-    expect(vi.mocked(createCustomer)).not.toHaveBeenCalled();
-  });
-
-  it('tracks customer-creation failure auditing in the waitUntil promise', async () => {
-    const { createCustomer } = await import('../src/lib/verifone');
-    vi.mocked(createCustomer).mockRejectedValueOnce(new Error('customer-service down'));
-    const db = await import('../src/lib/db');
-    const logSpy = vi.spyOn(db, 'logPaymentEvent').mockRejectedValueOnce(new Error('audit-write down'));
-    let backgroundWork: Promise<unknown> | undefined;
-    const waitUntil = vi.fn((promise: Promise<unknown>) => {
-      backgroundWork = promise;
-      void promise.catch(() => {});
-    });
-    const { createCheckoutUseCase } = await import('../src/usecases/create-checkout');
-
-    try {
-      const outcome = await createCheckoutUseCase(env, {
-        idempotencyKey: crypto.randomUUID(),
-        items: [{ product_id: 'TEST-001', quantity: 1 }],
-        customerEmail: 'buyer@example.com',
-        termsAccepted: true,
-        termsVersion: TERMS_VERSION,
-        publicApiOrigin: 'https://test.example.com',
-        executionCtx: { waitUntil },
-      });
-
-      expect(outcome.status).toBe(200);
-      expect(waitUntil).toHaveBeenCalledOnce();
-      expect(backgroundWork).toBeDefined();
-      await expect(backgroundWork).rejects.toThrow('audit-write down');
-    } finally {
-      logSpy.mockRestore();
-    }
-  });
-
-  it('proceeds with checkout even if customer creation fails (best-effort async)', async () => {
-    const { createCustomer } = await import('../src/lib/verifone');
-    vi.mocked(createCustomer).mockRejectedValueOnce(new Error('customer-service down'));
-
-    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({
-        items: [{ product_id: 'TEST-001', quantity: 1 }],
-        customer_email: 'buyer@example.com',
-        terms_accepted: true,
-        terms_version: TERMS_VERSION,
-      }),
-    });
-
-    expect(resp.status).toBe(200);
-    expect(vi.mocked(createCustomer)).toHaveBeenCalled();
   });
 });
