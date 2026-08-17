@@ -13,6 +13,7 @@ import { SELF, env } from 'cloudflare:test';
 import { createOrderWithAccessToken, generateOrderNumber, generateUUID } from '../src/lib/db';
 import { computeAuditHash, computeRetentionDate, RETENTION_YEARS } from '../src/lib/invoice-db';
 import type { LineItem } from '../src/types/api';
+import { TERMS_VERSION } from '../src/lib/terms';
 
 vi.mock('../src/lib/verifone', () => ({
   getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
@@ -49,6 +50,8 @@ async function createPaidOrder(): Promise<{ orderId: string; token: string }> {
     amount: 2000,
     customerEmail: 'test@example.is',
     customerName: 'Test Customer',
+    termsAcceptedAt: new Date().toISOString(),
+    termsVersion: TERMS_VERSION,
     items: makeTestItems(),
     accessToken: token,
   });

@@ -17,6 +17,10 @@ export interface EnhancedCreateCheckoutInput {
   customerEmail?: string;
   customerName?: string;
   buyerKennitala?: string;
+  /** Buyer accepted the current terms of sale (see src/lib/terms.ts). */
+  termsAccepted: true;
+  /** The terms version the buyer accepted. */
+  termsVersion: string;
   publicApiOrigin: string;
   executionCtx?: Pick<ExecutionContext, 'waitUntil'>;
 }
@@ -210,6 +214,8 @@ export async function enhancedCreateCheckout(
       customerEmail: input.customerEmail,
       customerName: input.customerName,
       buyerKennitala: input.buyerKennitala,
+      termsAcceptedAt: new Date().toISOString(),
+      termsVersion: input.termsVersion,
       items,
       accessToken: orderAccessToken,
     });

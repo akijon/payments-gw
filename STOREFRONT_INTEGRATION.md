@@ -36,9 +36,15 @@ Body:
 {
   "items": [{ "product_id": "LOPAPEYSA-M", "quantity": 1 }],
   "customer_email": "buyer@example.is",
-  "customer_name": "Buyer Name"
+  "customer_name": "Buyer Name",
+  "terms_accepted": true,
+  "terms_version": "2026-08-17"
 }
 ```
+
+`terms_accepted` and `terms_version` are **required**. The Worker rejects the checkout with `400 terms_not_accepted` unless `terms_accepted` is exactly `true`, and with `400 terms_version_mismatch` unless `terms_version` equals the gateway's current `TERMS_VERSION` (defined in `src/lib/terms.ts`). The buyer must accept the terms of sale (including the 14-day withdrawal notice) before the storefront initiates checkout; the Worker persists `terms_accepted_at` + `terms_version` on the order as the consent record.
+
+**Version bump procedure:** when the storefront terms page (`app/terms/page.tsx`) content changes, bump `TERMS_VERSION` in the storefront's `app/lib/compliance.ts` **and** the gateway's `src/lib/terms.ts` to the same new value (date-based, e.g. `2026-08-17`). The storefront ships a drift test pinning the value, so the two repos cannot silently diverge.
 
 Never send prices, totals, currency, product names, or payment state from the browser. The Worker resolves the catalog price and rejects client-controlled money fields.
 

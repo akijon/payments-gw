@@ -7,6 +7,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
+import { TERMS_VERSION } from '../src/lib/terms';
+import type { CreateCheckoutInput } from '../src/usecases/create-checkout';
 
 vi.mock('../src/lib/verifone', () => ({
   getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
@@ -34,6 +36,8 @@ describe('POST /api/checkout', () => {
       body: JSON.stringify({
         items: [{ product_id: 'LOPAPEYSA-M', quantity: 1 }],
         customer_email: 'test@example.com',
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
 
@@ -56,11 +60,116 @@ describe('POST /api/checkout', () => {
     expect(order!.status).toBe('checkout_created');
     expect(order!.amount).toBe(18000);
     expect(order!.verifone_checkout_id).toBe('chk-test-1');
+    // Terms-of-sale consent is persisted with the order: the version the buyer
+    // accepted and the moment the acceptance was recorded.
+    expect(order!.terms_version).toBe(TERMS_VERSION);
+    expect(order!.terms_accepted_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
     const { createCheckout } = await import('../src/lib/verifone');
     const request = vi.mocked(createCheckout).mock.calls[0]?.[1];
     // No PUBLIC_API_URL in wrangler.test.toml: the request origin is the callback origin.
     expect(request?.returnUrl).toMatch(/^https:\/\/test\.example\.com\/api\/return\?order_id=[0-9a-f-]+$/);
+  });
+
+  it('rejects checkout when terms_accepted is missing', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+    });
+
+    expect(resp.status).toBe(400);
+    expect(await resp.json()).toMatchObject({ code: 'terms_not_accepted' });
+  });
+
+  it('rejects checkout when terms_accepted is false', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: false,
+        terms_version: '2026-08-17',
+      }),
+    });
+
+    expect(resp.status).toBe(400);
+    expect(await resp.json()).toMatchObject({ code: 'terms_not_accepted' });
+  });
+
+  it('rejects checkout with a stale terms_version', async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: '1970-01-01',
+      }),
+    });
+
+    expect(resp.status).toBe(400);
+    expect(await resp.json()).toMatchObject({ code: 'terms_version_mismatch' });
+  });
+
+  it('replays a completed checkout after a terms-version bump', async () => {
+    const idempotencyKey = 'checkout-terms-bump-replay-0001';
+    const oldTermsVersion = '2026-08-16';
+    const items = [{ product_id: 'TEST-001', quantity: 1 }];
+    const { hashIdempotencyValue } = await import('../src/lib/db');
+    const keyHash = await hashIdempotencyValue(idempotencyKey);
+    const requestHash = await hashIdempotencyValue(
+      JSON.stringify({
+        items,
+        customer_email: null,
+        customer_name: null,
+        buyer_kennitala: null,
+        terms_accepted: true,
+        terms_version: oldTermsVersion,
+      }),
+    );
+    const orderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+    await env.DB.prepare(
+      `INSERT INTO orders (id, order_number, status, currency, amount, items_json, terms_accepted_at, terms_version)
+       VALUES (?, 'IRJA-TERMS-REPLAY', 'checkout_created', 'ISK', 1000, '[]', '2026-08-16T00:00:00.000Z', ?)`,
+    )
+      .bind(orderId, oldTermsVersion)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO checkout_attempts (key_hash, request_hash, order_id, status, checkout_url)
+       VALUES (?, ?, ?, 'completed', 'https://pay.mock.verifone/old-terms-checkout')`,
+    )
+      .bind(keyHash, requestHash, orderId)
+      .run();
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ items, terms_accepted: true, terms_version: oldTermsVersion }),
+    });
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toMatchObject({
+      order_id: orderId,
+      checkout_url: 'https://pay.mock.verifone/old-terms-checkout',
+      idempotent_replay: true,
+    });
+  });
+
+  it("rejects checkout when terms_accepted is the string 'true' (no type coercion)", async () => {
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: 'true',
+        terms_version: '2026-08-17',
+      }),
+    });
+
+    expect(resp.status).toBe(400);
+    expect(await resp.json()).toMatchObject({ code: 'terms_not_accepted' });
   });
 
   it('builds return_url from PUBLIC_API_URL when the Worker is reached through another origin', async () => {
@@ -72,7 +181,11 @@ describe('POST /api/checkout', () => {
       const resp = await SELF.fetch('https://test.example.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+        body: JSON.stringify({
+          items: [{ product_id: 'TEST-001', quantity: 1 }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
       });
       expect(resp.status).toBe(200);
       const data = (await resp.json()) as { order_id: string };
@@ -89,7 +202,7 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ items: [] }),
+      body: JSON.stringify({ items: [], terms_accepted: true, terms_version: TERMS_VERSION }),
     });
     expect(resp.status).toBe(400);
   });
@@ -98,7 +211,7 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ customer_email: 'test@example.com' }),
+      body: JSON.stringify({ customer_email: 'test@example.com', terms_accepted: true, terms_version: TERMS_VERSION }),
     });
     expect(resp.status).toBe(400);
   });
@@ -112,6 +225,8 @@ describe('POST /api/checkout', () => {
           { product_id: 'HOODIE-BLK-M', quantity: 2 }, // 8900 * 2
           { product_id: 'TSHIRT-WHT-L', quantity: 1 }, // 4500
         ],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
 
@@ -133,6 +248,8 @@ describe('POST /api/checkout', () => {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
         items: [{ sku: 'TEST-001', quantity: 3 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
     expect(resp.status).toBe(200);
@@ -154,6 +271,8 @@ describe('POST /api/checkout', () => {
           { product_id: 'TEST-001', quantity: 1 },
           { product_id: 'EUR-TEST-001', quantity: 1 },
         ],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
 
@@ -169,7 +288,11 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
     });
 
     expect(resp.status).toBe(502);
@@ -182,6 +305,8 @@ describe('POST /api/checkout', () => {
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_name: 'x'.repeat(16 * 1024),
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
 
@@ -194,7 +319,11 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
     });
     expect(resp.status).toBe(400);
     expect(await resp.json()).toMatchObject({ code: 'idempotency_key_required' });
@@ -206,7 +335,11 @@ describe('POST /api/checkout', () => {
       SELF.fetch('https://test.example.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+        body: JSON.stringify({
+          items: [{ product_id: 'TEST-001', quantity: 1 }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
       });
 
     const first = await request();
@@ -234,7 +367,11 @@ describe('POST /api/checkout', () => {
     ).run();
 
     const idempotencyKey = 'checkout-catalog-drift-0001';
-    const body = JSON.stringify({ items: [{ product_id: 'CATALOG-DRIFT-TEST', quantity: 1 }] });
+    const body = JSON.stringify({
+      items: [{ product_id: 'CATALOG-DRIFT-TEST', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
 
     const first = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
@@ -273,7 +410,11 @@ describe('POST /api/checkout', () => {
       SELF.fetch('https://test.example.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity }] }),
+        body: JSON.stringify({
+          items: [{ product_id: 'TEST-001', quantity }],
+          terms_accepted: true,
+          terms_version: TERMS_VERSION,
+        }),
       });
 
     expect((await send(1)).status).toBe(200);
@@ -284,7 +425,11 @@ describe('POST /api/checkout', () => {
 
   it('rejects a retry while a checkout attempt is still genuinely in flight', async () => {
     const idempotencyKey = 'checkout-inflight-00001';
-    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] });
+    const body = JSON.stringify({
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
     const first = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
@@ -311,7 +456,11 @@ describe('POST /api/checkout', () => {
 
   it('recovers a persisted provider result after finalization rollback without creating a second HPP session', async () => {
     const idempotencyKey = 'checkout-finalization-recovery-0001';
-    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] });
+    const body = JSON.stringify({
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
     const conflictingOrderId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     await env.DB.prepare(
       `INSERT INTO orders (
@@ -363,9 +512,11 @@ describe('POST /api/checkout', () => {
 
   it('returns the finalized checkout when a same-key retry wins the finalization race', async () => {
     const idempotencyKey = 'checkout-finalization-race-0001';
-    const checkoutInput = {
+    const checkoutInput: CreateCheckoutInput = {
       idempotencyKey,
       items: [{ product_id: 'TEST-001', quantity: 1 }],
+      termsAccepted: true,
+      termsVersion: TERMS_VERSION,
       publicApiOrigin: 'https://test.example.com',
     };
     const db = await import('../src/lib/db');
@@ -422,7 +573,11 @@ describe('POST /api/checkout', () => {
     // A Worker that dies before persisting checkout_url must not wedge the key
     // forever — once the lease window has passed, a retry should succeed fresh.
     const idempotencyKey = 'checkout-stale-00001';
-    const body = JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] });
+    const body = JSON.stringify({
+      items: [{ product_id: 'TEST-001', quantity: 1 }],
+      terms_accepted: true,
+      terms_version: TERMS_VERSION,
+    });
 
     // Distinct provider checkout IDs per call, as a real second Verifone session would get.
     const { createCheckout } = await import('../src/lib/verifone');
@@ -466,6 +621,8 @@ describe('POST /api/checkout', () => {
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_email: 'buyer@example.com',
         customer_name: 'Jón Jónsson',
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
 
@@ -481,7 +638,11 @@ describe('POST /api/checkout', () => {
     const resp = await SELF.fetch('https://test.example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-      body: JSON.stringify({ items: [{ product_id: 'TEST-001', quantity: 1 }] }),
+      body: JSON.stringify({
+        items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
     });
 
     expect(resp.status).toBe(200);
@@ -506,6 +667,8 @@ describe('POST /api/checkout', () => {
         idempotencyKey: crypto.randomUUID(),
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customerEmail: 'buyer@example.com',
+        termsAccepted: true,
+        termsVersion: TERMS_VERSION,
         publicApiOrigin: 'https://test.example.com',
         executionCtx: { waitUntil },
       });
@@ -529,6 +692,8 @@ describe('POST /api/checkout', () => {
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_email: 'buyer@example.com',
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
       }),
     });
 

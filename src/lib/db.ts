@@ -242,6 +242,10 @@ export async function createOrderWithAccessToken(
     customerEmail?: string;
     customerName?: string;
     buyerKennitala?: string;
+    /** ISO-8601 timestamp of the buyer's terms-of-sale acceptance. */
+    termsAcceptedAt: string;
+    /** The terms version the buyer accepted (see src/lib/terms.ts). */
+    termsVersion: string;
     items: LineItem[];
     accessToken: string;
   },
@@ -249,8 +253,8 @@ export async function createOrderWithAccessToken(
   await db.batch([
     db
       .prepare(
-        `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, buyer_kennitala, items_json)
-       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, buyer_kennitala, terms_accepted_at, terms_version, items_json)
+       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         params.id,
@@ -260,6 +264,8 @@ export async function createOrderWithAccessToken(
         params.customerEmail ?? null,
         params.customerName ?? null,
         params.buyerKennitala ?? null,
+        params.termsAcceptedAt,
+        params.termsVersion,
         JSON.stringify(params.items),
       ),
     db

@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import { createOrderWithAccessToken, generateOrderNumber, generateUUID } from '../src/lib/db';
 import type { LineItem } from '../src/types/api';
+import { TERMS_VERSION } from '../src/lib/terms';
 
 // Mock the Verifone API client for checkout kennitala tests.
 vi.mock('../src/lib/verifone', () => ({
@@ -54,6 +55,8 @@ async function createPaidOrder(opts?: { kennitala?: string }): Promise<{ orderId
     customerEmail: 'test@example.is',
     customerName: 'Test Customer',
     buyerKennitala: opts?.kennitala,
+    termsAcceptedAt: new Date().toISOString(),
+    termsVersion: TERMS_VERSION,
     items: makeTestItems(),
     accessToken: token,
   });
@@ -89,6 +92,8 @@ describe('Invoice API endpoint', () => {
       orderNumber: generateOrderNumber(),
       currency: 'ISK',
       amount: 2000,
+      termsAcceptedAt: new Date().toISOString(),
+      termsVersion: TERMS_VERSION,
       items: makeTestItems(),
       accessToken: token,
     });
@@ -269,6 +274,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_email: 'buyer@example.com',
         buyer_kennitala: '010130-3019', // valid checksum
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(200);
@@ -281,6 +288,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         buyer_kennitala: '010130-3029', // invalid checksum (should be 1, digit is 2)
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(422);
@@ -300,6 +309,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         buyer_kennitala: '0000000699',
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(422);
@@ -319,6 +330,8 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
         items: [{ product_id: 'TEST-001', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: '2026-08-17',
       }),
     });
     expect(resp.status).toBe(200);
