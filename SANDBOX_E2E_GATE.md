@@ -4,9 +4,9 @@ Run this only against the dedicated sandbox Worker and sandbox Verifone/Landsban
 
 ## Preconditions
 
-- [ ] Replace the `products` seed rows with the approved merchant catalog before any production migration. The repository currently contains development fixtures only; no real catalog was supplied, so it was deliberately not invented.
+- [x] Replace the `products` seed rows with the approved merchant catalog before any production migration — done in `migrations/0017_merchant_catalog.sql` (deactivates the 7 dev fixtures, activates the 6 real products supplied by the release owner). Still needs to be applied to the sandbox D1 — see the migrations item below.
 - [ ] Configure all nine Worker secrets in the sandbox Worker.
-- [ ] Apply migrations through `0016_customer_billing.sql` (all migrations in `migrations/`, currently `0001`–`0016`) to the sandbox D1 database using `npm run db:migrate:sandbox`. `0014` adds shipping, `0015` adds terms consent, and `0016` adds the billing/customer fields required before an HPP 3DS checkout can be created.
+- [ ] Apply migrations through `0017_merchant_catalog.sql` (all migrations in `migrations/`, currently `0001`–`0017`) to the sandbox D1 database using `npm run db:migrate:sandbox`. `0014` adds shipping, `0015` adds terms consent, `0016` adds the billing/customer fields required before an HPP 3DS checkout can be created, and `0017` swaps in the real catalog. Re-verify this reference stays current as new migrations land.
 - [ ] Set the sandbox webhook URL to `https://<sandbox-worker>/api/webhooks/verifone` — the Worker's own origin, deliberately not `PUBLIC_API_URL`. Webhooks are server-to-server, so there is no browser origin to match, and delivery should not depend on the storefront being up. The storefront proxy would in fact preserve the body byte-exactly (it forwards the `Request` unchanged over a service binding, so detached-JWS verification would still pass) — the reason to keep webhooks direct is one less hop and one less dependency on the payment-confirmation path, not signature safety. Browser returns are the opposite case: they must use `PUBLIC_API_URL` (see `DEPLOYMENT_GATE.md`).
 - [ ] Obtain a vendor-signed Verifone fixture or perform the test from Verifone Sandbox.
 

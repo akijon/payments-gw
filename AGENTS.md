@@ -92,7 +92,8 @@ migrations/
 ├── 0013_incident_tracking.sql       # Incident tracking tables
 ├── 0014_shipping_cost.sql           # orders.shipping_incl_vat, required by assertPricingIntegrity
 ├── 0015_terms_acceptance.sql        # orders.terms_accepted_at/terms_version, required by checkout insert
-└── 0016_customer_billing.sql        # Billing identity + verifone_customer_id for HPP 3DS checkouts
+├── 0016_customer_billing.sql        # Billing identity + verifone_customer_id for HPP 3DS checkouts
+└── 0017_merchant_catalog.sql        # Real merchant catalog; deactivates dev fixture SKUs
 
 Stopping at `0008` breaks checkout and invoicing immediately — `0014` and `0015`
 are required by `src/lib/db.ts` and `src/lib/payment-integrity.ts`. Re-verify
