@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY,                        -- product_id / SKU (client-facing)
     name TEXT NOT NULL,
     description TEXT,
-    unit_price INTEGER NOT NULL,                -- minor units (aurar for ISK)
+    unit_price INTEGER NOT NULL,                -- kronur for ISK)
     currency TEXT NOT NULL DEFAULT 'ISK',
     active INTEGER NOT NULL DEFAULT 1,          -- 1 = sellable, 0 = retired
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
 
--- Seed catalog (sandbox / initial Irja assortment). Prices in aurar (minor units).
+-- Seed catalog (sandbox / initial Irja assortment). Prices in ISK.
 -- Replace or extend via ops; never accept prices from the client.
 INSERT OR IGNORE INTO products (id, name, description, unit_price, currency, active) VALUES
     ('HOODIE-BLK-M',  'Black Hoodie M',           'Black cotton hoodie, size M',           8900,  'ISK', 1),
