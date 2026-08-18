@@ -14,12 +14,17 @@
  *     === response.amount (shown to the buyer)
  *     === amount sent to Verifone
  *
- * Every assertion below reads the price from D1 rather than hardcoding it, so
- * a scaling bug introduced anywhere in that chain — catalog seed, resolver,
- * request builder — breaks this file. Assertions over literal arithmetic
- * (`expect(1500 + 250).toBe(1750)`) would not have caught it and are not tests
- * of this system; the previous version of this file consisted entirely of
- * those and imported nothing from `src/`.
+ * Most assertions below read the price from D1 rather than hardcoding it, so a
+ * scaling bug in the resolver or request builder breaks this file. That alone
+ * does not cover a regression in the catalog seed or loader: if `unit_price`
+ * itself is written 100x, the expectation and the actual scale together and
+ * every relative assertion still holds. One case therefore pins the seeded
+ * price to an independently stated whole-króna literal, which is the only
+ * assertion here that a 100x catalog regression cannot satisfy.
+ *
+ * Assertions over literal arithmetic alone (`expect(1500 + 250).toBe(1750)`)
+ * test JavaScript rather than this system; the previous version of this file
+ * consisted entirely of those and imported nothing from `src/`.
  *
  * Related coverage: `test/pricing-integrity.test.ts` (invoice vs charged
  * amount), `test/price-manipulation.test.ts` (client-supplied prices),
@@ -75,6 +80,42 @@ beforeEach(async () => {
 });
 
 describe('financial integrity: catalog price reaches the provider unscaled', () => {
+  // Independent anchor. Every other case in this describe reads its price from
+  // D1, so a seed or loader that reintroduces `priceIsk * 100` scales the
+  // expectation and the actual together and those cases still pass. This one
+  // states the seeded price as a literal, in whole krónur, so a 100x catalog
+  // regression fails here even though the chain is internally consistent.
+  // Update this constant deliberately when the seed price legitimately changes.
+  const SEEDED_HOODIE_ISK = 8900;
+
+  it('pins the seeded catalog price to a known whole-króna value', async () => {
+    expect(await catalogPrice('HOODIE-BLK-M')).toBe(SEEDED_HOODIE_ISK);
+  });
+
+  it('charges the independently known price, not a scaled one', async () => {
+    const quantity = 2;
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'HOODIE-BLK-M', quantity }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+    expect(resp.status).toBe(200);
+    const data = (await resp.json()) as { amount: number };
+
+    const { createCheckout } = await import('../../src/lib/verifone');
+    const sent = vi.mocked(createCheckout).mock.calls.at(-1)?.[1];
+
+    // 17.800 kr, not 1.780.000 kr.
+    expect(data.amount).toBe(SEEDED_HOODIE_ISK * quantity);
+    expect(sent?.amount).toBe(SEEDED_HOODIE_ISK * quantity);
+  });
+
   it('carries D1 unit_price through to the amount sent to Verifone, unmodified', async () => {
     const unitPrice = await catalogPrice('HOODIE-BLK-M');
     const quantity = 2;
