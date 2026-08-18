@@ -15,7 +15,7 @@ Browser <- /api/return <- Verifone HPP
 
 Keeping the storefront and gateway on one origin avoids unnecessary CORS exposure. If the Worker uses a separate origin, set `STOREFRONT_URL` to the exact browser origin and `PUBLIC_API_URL` to the Worker's public HTTPS origin. Verifone returns to `PUBLIC_API_URL/api/return`; the Worker then redirects the browser to the storefront.
 
-The currently deployed `irja.khalipa.net` bundle is **not compatible** with this contract: it posts a numeric `cart` to `/api/teya/checkout`, expects `checkoutUrl`, and labels the provider as Teya. This gateway uses Verifone and the contract below. Update the storefront and edge routing as one release; do not add an insecure price-mapping compatibility shim in the gateway.
+The storefront (`irja-storefront-2026`) now posts to `/api/checkout` per the contract below via a `PAYMENTS_GW` service binding (`worker/payments-proxy.ts`); the earlier Teya-branded `/api/teya/checkout` path has been fully removed (see `drizzle/0002_drop_teya_orphans.sql` there). Do not add an insecure price-mapping compatibility shim in the gateway for either contract.
 
 The hosted payment page is intentional. The storefront and Worker must never collect, proxy, log, or persist cardholder data.
 
