@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY,                        -- product_id / SKU (client-facing)
     name TEXT NOT NULL,
     description TEXT,
-    unit_price INTEGER NOT NULL,                -- kronur for ISK)
+    unit_price INTEGER NOT NULL,                -- major units (kronur for ISK)
     currency TEXT NOT NULL DEFAULT 'ISK',
     active INTEGER NOT NULL DEFAULT 1,          -- 1 = sellable, 0 = retired
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

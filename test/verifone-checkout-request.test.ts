@@ -242,9 +242,9 @@ describe('buildVerifoneCheckoutRequest', () => {
   });
 
   it('rejects a non-HTTPS shop_url so a cancel cannot downgrade the buyer to plaintext', () => {
-    expect(() => buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, shopUrl: 'http://irja.khalipa.net/' })).toThrow(
-      /shopUrl/,
-    );
+    expect(() =>
+      buildVerifoneCheckoutRequest(testEnv(), { ...BASE_PARAMS, shopUrl: 'http://irja.khalipa.net/' }),
+    ).toThrow(/shopUrl/);
   });
 
   it('rejects an unparseable shop_url', () => {

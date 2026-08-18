@@ -201,9 +201,7 @@ describe('financial integrity: money crossing the provider boundary is a safe in
 
   it('rejects zero and negative amounts', () => {
     expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: 0 })).toThrow(/Invalid checkout amount/);
-    expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: -8900 })).toThrow(
-      /Invalid checkout amount/,
-    );
+    expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: -8900 })).toThrow(/Invalid checkout amount/);
   });
 
   it('rejects an amount beyond safe integer precision', () => {
