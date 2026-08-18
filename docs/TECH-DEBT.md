@@ -12,6 +12,7 @@
 | Breaker trial is not single-flight                     | `src/lib/circuit-breaker.ts`                        | Resilience       | Low    | Low    | Low      | Open — `openedAt` stays set until the trial resolves, so every concurrent request in the isolate is admitted the moment the 30 s cooldown elapses, instead of one trial call. Per-isolate scope caps the blast radius; fix is an in-flight-trial flag |
 | Duplicated OAuth2 client-credentials token fetch/cache | `src/lib/verifone.ts`, `src/lib/landsbankinn.ts`    | Code Duplication | Medium | Low    | Medium   | Resolved — shared `getOAuth2ClientCredentialsToken` (`src/lib/oauth.ts`), called from `getVerifoneToken` and `getLandsbankinnToken`; both now use Landsbankinn's stricter token/expiry/response-size bounds                                           |
 | Verifone auth model mismatched provisioned credentials | `src/lib/verifone.ts`, Worker secrets               | Integration      | High   | Low    | Critical | Resolved — Verifone now uses the provisioned user UUID/API key via documented HTTP Basic authentication; the OAuth helper remains Landsbankinn-only                                                                                                   |
+| Seller identity absent from production config template | `wrangler.production.toml.example`                  | Configuration    | High   | Low    | High     | Open — see "Seller identity missing from production template" below                                                                                                                                                                                   |
 
 ---
 
@@ -67,3 +68,38 @@ surfaced one internal item the prior passes missed: duplicated OAuth2
 client-credentials logic between the Verifone and Landsbankinn clients. Closed
 same-day (see ledger above). External blockers in `DEPLOYMENT_GATE.md` are
 unchanged by this fix.
+
+## Seller identity missing from production template
+
+`getSellerInfo` (`src/lib/seller.ts`) requires `SELLER_NAME`,
+`SELLER_KENNITALA`, `SELLER_VSK_NUMBER`, `SELLER_ADDRESS`, and `SELLER_EMAIL`.
+All five are set in `wrangler.toml` (sandbox) and `wrangler.test.toml`, and none
+is in `wrangler.production.toml.example`.
+
+A production Worker configured from that template therefore has no seller
+identity: `getSellerInfo` returns `null` and the invoice route answers `503`.
+Checkout and payment are unaffected, so the gap stays invisible until the first
+invoice is generated — after money has moved. Kennitala, VSK number, and
+registered address are legally required on an Icelandic invoice, so this is a
+compliance failure rather than a degraded response.
+
+These are `[vars]`, not secrets, so their absence from `.dev.vars.example` and
+`scripts/setup-secrets.sh` is correct — those cover the ten Worker secrets only.
+The production template is the one place they belong and the one place they are
+missing. Neither gate document currently mentions seller configuration.
+
+Fix:
+
+- Add the five required vars plus optional `SELLER_PHONE` to
+  `wrangler.production.toml.example`, with placeholders obviously non-real so an
+  unedited template cannot ship.
+- Add a `DEPLOYMENT_GATE.md` blocker: production seller identity configured and
+  verified against the registered company record.
+- Consider a deploy-time assertion so a missing seller identity fails loudly
+  rather than at first invoice.
+
+The fail-closed behaviour in `seller.ts` is correct and stays. Real values must
+come from the company record; the sandbox values in `wrangler.toml` are
+placeholders of unverified provenance and must not be copied forward.
+
+Found while fixing CI formatting on PR #16; out of that PR's scope.
