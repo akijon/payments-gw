@@ -13,10 +13,10 @@ import { SELF, env } from 'cloudflare:test';
 import { createOrderWithAccessToken, generateOrderNumber, generateUUID } from '../src/lib/db';
 import type { LineItem } from '../src/types/api';
 import { TERMS_VERSION } from '../src/lib/terms';
+import { TEST_CHECKOUT_CUSTOMER } from './fixtures/checkout-customer';
 
 // Mock the Verifone API client for checkout kennitala tests.
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'chk-test-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-1',
@@ -271,6 +271,7 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         customer_email: 'buyer@example.com',
         buyer_kennitala: '010130-3019', // valid checksum
@@ -286,6 +287,7 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         buyer_kennitala: '010130-3029', // invalid checksum (should be 1, digit is 2)
         terms_accepted: true,
@@ -307,6 +309,7 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         buyer_kennitala: '0000000699',
         terms_accepted: true,
@@ -329,6 +332,7 @@ describe('Checkout kennitala validation (reject before payment)', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'TEST-001', quantity: 1 }],
         terms_accepted: true,
         terms_version: '2026-08-17',

@@ -71,7 +71,12 @@ describe('GET /api/orders/:id', () => {
     const data = (await resp.json()) as Record<string, unknown>;
     expect(data.verifone_transaction_id).toBeUndefined();
     expect(data.verifone_checkout_id).toBeUndefined();
+    expect(data.verifone_customer_id).toBeUndefined();
     expect(data.landsbankinn_settlement_id).toBeUndefined();
+    expect(data.customer_email).toBeUndefined();
+    expect(data.customer_name).toBeUndefined();
+    expect(data.billing).toBeUndefined();
+    expect(data.billing_address_1).toBeUndefined();
     expect(data.items_json).toBeUndefined();
   });
 

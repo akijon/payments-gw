@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
+import { TEST_CHECKOUT_CUSTOMER } from './fixtures/checkout-customer';
 
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'test-checkout-id',
     checkoutUrl: 'https://test.verifone.com/checkout/test-checkout-id',
@@ -21,9 +21,10 @@ beforeEach(async () => {
 describe('Price Manipulation Security Tests', () => {
   it('rejects checkout when client sends unit_price (price manipulation)', async () => {
     const maliciousRequest = {
+      ...TEST_CHECKOUT_CUSTOMER,
       items: [
         {
-          name: 'Expensive Product (RRP: 50000 aurar)',
+          name: 'Expensive Product (RRP: 50.000 kr)',
           quantity: 1,
           unit_price: 1,
           total_amount: 1,
@@ -49,6 +50,7 @@ describe('Price Manipulation Security Tests', () => {
 
   it('rejects checkout when client provides inconsistent price and total', async () => {
     const maliciousRequest = {
+      ...TEST_CHECKOUT_CUSTOMER,
       items: [
         {
           name: 'Test Product',
@@ -77,6 +79,7 @@ describe('Price Manipulation Security Tests', () => {
 
   it('rejects checkout when client provides unknown SKU', async () => {
     const maliciousRequest = {
+      ...TEST_CHECKOUT_CUSTOMER,
       items: [
         {
           product_id: 'FAKE-999999',
@@ -102,6 +105,7 @@ describe('Price Manipulation Security Tests', () => {
 
   it('accepts secure product_id + quantity and charges catalog price only', async () => {
     const secureRequest = {
+      ...TEST_CHECKOUT_CUSTOMER,
       items: [{ product_id: 'HOODIE-BLK-M', quantity: 1 }],
       customer_email: 'buyer@example.com',
       terms_accepted: true,
@@ -130,6 +134,7 @@ describe('Price Manipulation Security Tests', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, unit_price: 1 }],
         terms_accepted: true,
         terms_version: '2026-08-17',

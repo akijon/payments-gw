@@ -17,7 +17,17 @@ Idempotency-Key: <crypto.randomUUID()>
   "items": [
     { "product_id": "LOPAPEYSA-M", "quantity": 1 }
   ],
-  "customer_email": "buyer@example.is"
+  "customer_email": "buyer@example.is",
+  "billing": {
+    "first_name": "Buyer",
+    "last_name": "Name",
+    "address_1": "Laugavegur 1",
+    "city": "Reykjavík",
+    "country_code": "IS",
+    "postal_code": "101"
+  },
+  "terms_accepted": true,
+  "terms_version": "2026-08-17"
 }
 ```
 

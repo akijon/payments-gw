@@ -17,8 +17,8 @@ export interface LineItem {
   product_id: string;
   name: string;
   quantity: number;
-  unit_price: number; // minor units — from catalog
-  total_amount: number; // minor units — unit_price * quantity
+  unit_price: number; // whole krónur (ISK major units) — from catalog
+  total_amount: number; // whole krónur (ISK major units) — unit_price * quantity
   sku?: string; // same as product_id when set
 }
 
@@ -32,17 +32,31 @@ export interface CheckoutItemRequest {
   quantity: number;
 }
 
+/** Billing identity required by Verifone Customer + HPP 3DS. */
+export interface CheckoutBillingDetails {
+  first_name: string;
+  last_name: string;
+  address_1: string;
+  city: string;
+  country_code: string;
+  postal_code: string;
+  state?: string;
+  phone?: string;
+}
+
 export interface Order {
   id: string;
   order_number: string;
   status: OrderStatus;
   currency: string;
-  amount: number; // minor units — the charged total, inclusive of shipping
+  amount: number; // whole krónur (ISK major units) — the charged total, inclusive of shipping
   customer_email?: string;
   customer_name?: string;
+  billing?: CheckoutBillingDetails;
+  verifone_customer_id?: string;
   buyer_kennitala?: string; // Icelandic national ID — required for B2B invoices
   items: LineItem[];
-  /** Shipping charged with this order, VAT-inclusive minor units. */
+  /** Shipping charged with this order, VAT-inclusive, in whole krónur (ISK major units). */
   shipping_incl_vat: number;
   payment_method?: PaymentMethod; // Determined from Verifone response after payment
   verifone_checkout_id?: string;
@@ -75,6 +89,7 @@ export interface VerifoneBilling {
   country_code?: string;
   postal_code?: string;
   state?: string;
+  phone?: string;
 }
 
 export interface VerifoneCardConfiguration {
@@ -85,6 +100,7 @@ export interface VerifoneCardConfiguration {
   threed_secure?: {
     enabled: boolean;
     threeds_contract_id: string;
+    transaction_mode: 'M' | 'P' | 'R' | 'S' | 'T';
     authentication_indicator?: ThreeDSAuthenticationIndicator;
     challenge_indicator?: ThreeDSChallengeIndicator;
   };
@@ -107,6 +123,8 @@ export interface VerifoneCheckoutRequest {
   amount: number;
   merchant_reference: string;
   return_url: string;
+  /** Where Verifone sends the shopper if they cancel the HPP. Verifone has no `cancel_url`. */
+  shop_url?: string;
   interaction_type: 'HPP' | 'IFRAME' | 'PAYMENT_LINK';
   customer?: string;
   configurations: VerifoneCheckoutConfigurations;

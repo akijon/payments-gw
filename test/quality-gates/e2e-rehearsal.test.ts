@@ -16,9 +16,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
+import { TEST_CHECKOUT_CUSTOMER } from '../fixtures/checkout-customer';
 
 vi.mock('../../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn(),
   createCustomer: vi.fn().mockResolvedValue('cust-mock-1'),
   getCheckout: vi.fn(),
@@ -88,6 +88,7 @@ describe('Sandbox rehearsal (mocked) — SANDBOX_E2E_GATE.md checklist', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'LOPAPEYSA-M', quantity: 1 }],
         terms_accepted: true,
         terms_version: '2026-08-17',

@@ -50,7 +50,7 @@ Cron (06:00 UTC) → Worker /scheduled → Landsbankinn Acquiring API → D1 (se
 - **Verify, don't trust.** Both the redirect return and webhook are verified server-to-server against the Verifone API before order status changes. The `transaction_id` from the redirect must match the checkout's `transaction_id`.
 - **Idempotent webhooks.** A `processed_webhooks` table deduplicates by `verifone_event_id`. Duplicate deliveries return 200 without reprocessing.
 - **JWS webhook verification.** Verifone signs webhooks with JWS (JSON Web Signature) using JWKS. The Worker canonicalizes the JSON body per RFC 8785, matches the `kid` from the `x-vfi-jws` header against cached JWKS, and verifies with the Web Crypto API.
-- **Amounts in minor units.** All monetary amounts are integers in minor units (aurar for ISK). No floating-point.
+- **Amounts in whole krónur.** All monetary amounts are integers in ISK major units (whole krónur), never aurar. No floating-point.
 
 ## Project Structure
 
@@ -128,8 +128,8 @@ A separate `wrangler.test.toml` provides test-only API URLs so mocks can be regi
 All secrets are stored in Cloudflare Secrets Store — never in code, `wrangler.toml`, or `.dev.vars` (which is gitignored). Set via:
 
 ```bash
-npx wrangler secret put VERIFONE_CLIENT_ID
-npx wrangler secret put VERIFONE_CLIENT_SECRET
+npx wrangler secret put VERIFONE_USER_ID
+npx wrangler secret put VERIFONE_API_KEY
 # ... see src/types/env.ts for the full list
 ```
 
@@ -140,12 +140,12 @@ npx wrangler secret put VERIFONE_CLIENT_SECRET
 | Table | Purpose |
 |-------|---------|
 | `orders` | Order lifecycle: pending → checkout_created → paid → settled |
-| `products` | Authoritative catalog: id/SKU, name, unit_price (minor units), active |
+| `products` | Authoritative catalog: id/SKU, name, unit_price (whole krónur), active |
 | `payment_events` | Audit log: every state transition with source, payload, verified flag |
 | `processed_webhooks` | Idempotency: deduplicates by `verifone_event_id` |
 | `settlements` | Landsbankinn settlement batches from daily reconciliation cron |
 
-All IDs are UUID v4 (no auto-increment). Amounts are integers in minor units.
+All IDs are UUID v4 (no auto-increment). Amounts are integers in whole krónur (ISK major units).
 
 ## API Endpoints
 
@@ -180,7 +180,7 @@ Hard rules above always apply. Domain constraints:
 1. **Never store, process, or transmit card data.** No PAN, CVV, expiry, or cardholder name. Card capture stays on Verifone HPP.
 2. **Always verify payments server-side.** Never trust redirect query params or webhook payloads alone. Call `GET /v2/checkout/{id}` before status transitions.
 3. **Keep webhooks idempotent.** Check `processed_webhooks` before processing. Return 200 for duplicates.
-4. **Amounts are integers.** Minor units (aurar for ISK). No floating-point money.
+4. **Amounts are integers.** Whole krónur (ISK major units), never aurar. No floating-point money.
 5. **Test-first (Vitest).** Failing test before implementation. Pattern: `vi.mock` + `SELF.fetch` + real Miniflare D1. Do not call work complete without green tests.
 6. **No secrets in code.** `wrangler secret put`; `.dev.vars` gitignored.
 7. **Maintain the audit trail.** Every state transition → `payment_events` with source + timestamp.

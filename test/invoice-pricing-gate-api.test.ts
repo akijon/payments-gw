@@ -17,7 +17,6 @@ import type { LineItem } from '../src/types/api';
 import { TERMS_VERSION } from '../src/lib/terms';
 
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn(),
   createCustomer: vi.fn(),
   getCheckout: vi.fn(),

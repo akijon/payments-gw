@@ -63,9 +63,9 @@ after. Moving it would have been a pure file rename with no substantive change.
 
 - **PCI Scope:** SAQ A — zero PAN, CVV, or cardholder data stored or processed.
 - **IDs:** UUID v4 primary keys for all entities (`orders`, `payment_events`, `processed_webhooks`, `settlements`).
-- **Amounts:** Non-negative integers in minor units (aurar for ISK).
+- **Amounts:** Non-negative integers in ISK major units (whole krónur). Never aurar.
 - **Concurrency & Isolation:** D1 SQLite transactions (`db.batch()`). Status updates use strict optimistic lock guards (`WHERE id = ? AND status IN (...)`).
-- **Schema Migrations:** Managed sequentially via SQL migration files (`migrations/0001_init.sql` through `0008_payment_method.sql`).
+- **Schema Migrations:** Managed sequentially via SQL migration files (`migrations/0001_init.sql` through `0016_customer_billing.sql`).
 
 ---
 
@@ -78,3 +78,4 @@ after. Moving it would have been a pure file rename with no substantive change.
 | 2026-07-28 | Webhook Idempotency                     | Deduplication via `processed_webhooks` table using `verifone_event_id` primary key.                                                                                                                                                                                                                                      |
 | 2026-07-29 | Thin use-case layer, no ports/DI        | Closed the remaining internal engineering backlog (circuit breaker, deep health check, use-case extraction, reconciliation DB encapsulation) with dummy/local material only; every remaining blocker is external — see `DEPLOYMENT_GATE.md`.                                                                             |
 | 2026-08-07 | Shared OAuth2 client-credentials helper | `getVerifoneToken` and `getLandsbankinnToken` reimplemented the same cache-then-fetch client-credentials flow independently; extracted to `src/lib/oauth.ts` and applied Landsbankinn's stricter token-length/expiry/response-size bounds to both, so Verifone's token handling is no longer weaker than Landsbankinn's. |
+| 2026-08-17 | Verifone API-key Basic Auth             | Live credential validation established that the provisioned Verifone identity is a user UUID/API-key pair, not an OAuth client. Checkout, Customer, and verification calls now use the documented RFC 7617 `user-uuid:api-key` credential; OAuth remains isolated to Landsbankinn.                                       |

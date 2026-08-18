@@ -172,7 +172,7 @@ main() {
     echo
     log "Next steps after token is ready:"
     echo "  npx wrangler deploy                    # Deploy the Worker"
-    echo "  npx wrangler secret put VERIFONE_CLIENT_ID    # Set secrets"
+    echo "  npx wrangler secret put VERIFONE_USER_ID      # Set Verifone Basic Auth user UUID"
     echo "  npm run db:migrate:prod               # Apply D1 schema"
 }
 

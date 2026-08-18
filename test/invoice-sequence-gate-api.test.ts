@@ -15,7 +15,6 @@ import { TERMS_VERSION } from '../src/lib/terms';
 // Matches test/invoice-api.test.ts: the Worker entrypoint pulls in the Verifone
 // client at module load, which cannot initialize under the test runtime.
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'chk-test-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-1',

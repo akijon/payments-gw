@@ -3,9 +3,8 @@ set -euo pipefail
 
 readonly CONFIG_PATH="${PRODUCTION_WRANGLER_CONFIG:-wrangler.production.toml}"
 readonly REQUIRED_SECRETS=(
-  VERIFONE_CLIENT_ID
-  VERIFONE_CLIENT_SECRET
-  VERIFONE_SCOPE
+  VERIFONE_USER_ID
+  VERIFONE_API_KEY
   VERIFONE_ENTITY_ID
   VERIFONE_PAYMENT_CONTRACT_ID
   VERIFONE_3DS_CONTRACT_ID
@@ -29,7 +28,8 @@ fail() {
 grep -q '^ENVIRONMENT = "production"$' "$CONFIG_PATH" \
   || fail "$CONFIG_PATH must explicitly set ENVIRONMENT = \"production\"."
 
-secret_names="$(npx wrangler secret list --config "$CONFIG_PATH" 2>/dev/null | tail -n +2 | awk '{print $1}')" \
+secret_names="$(npx wrangler secret list --config "$CONFIG_PATH" 2>/dev/null | node -e \
+  'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>JSON.parse(s).forEach(x=>console.log(x.name)))')" \
   || fail 'Unable to list production secrets. Check the Cloudflare API token and production Worker access.'
 
 missing=()

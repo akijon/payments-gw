@@ -201,13 +201,22 @@ describe('Invoice computation', () => {
       expect(invoice!.items[0].vat_amount).toBe(1935); // 10000 - 8065
     });
 
-    it('roundToIsk rounds to nearest 100 aurar', () => {
+    // Amounts are whole krónur, not aurar: ISK is stored and charged in major
+    // units. Rounding to the nearest króna is therefore Math.round, not a
+    // round-to-nearest-100. The old behaviour quantised every figure to the
+    // nearest 100 kr, which would silently rewrite invoice totals.
+    it('roundToIsk rounds to the nearest whole króna', () => {
       expect(roundToIsk(0)).toBe(0);
-      expect(roundToIsk(49)).toBe(0);
-      expect(roundToIsk(50)).toBe(100); // half-up: 50 aurar → 100 aurar (1 ISK)
+      expect(roundToIsk(49)).toBe(49);
       expect(roundToIsk(100)).toBe(100);
-      expect(roundToIsk(150)).toBe(200);
-      expect(roundToIsk(250)).toBe(300);
+      expect(roundToIsk(18_000)).toBe(18_000);
+      expect(roundToIsk(4990.4)).toBe(4990);
+      expect(roundToIsk(4990.5)).toBe(4991); // half-up
+    });
+
+    it('roundToIsk never quantises to the nearest 100 krónur', () => {
+      // 18_050 kr is a legitimate price; it must not collapse to 18_000.
+      expect(roundToIsk(18_050)).toBe(18_050);
     });
   });
 

@@ -48,19 +48,19 @@ or hardcode placeholder-that-looks-real credentials.
 
 Work the preconditions and evidence list in order:
 
-1. Confirm all ten Worker secrets required for sandbox are enumerated in
+1. Confirm all nine Worker secrets required for sandbox are enumerated in
    `src/types/env.ts` and documented in `.dev.vars.example`; flag any drift.
-2. Verify migrations through `0015_terms_acceptance.sql` apply cleanly to a
+2. Verify migrations through `0016_customer_billing.sql` apply cleanly to a
    fresh local D1 via `npm run db:migrate:local`. **Already fixed:**
    `SANDBOX_E2E_GATE.md` and `DEPLOYMENT_GATE.md` previously pinned the
    precondition to "migrations through `0008_payment_method.sql`" / `0001`–`0008`,
-   seven newer migrations behind (`0009`–`0015`). Both docs now say `0015`. This
+   eight newer migrations behind (`0009`–`0016`). Both docs now say `0016`. This
    was not just stale prose: `0014_shipping_cost.sql` adds
-   `orders.shipping_incl_vat`, required by `assertPricingIntegrity`
-   (`src/lib/payment-integrity.ts`), and `0015_terms_acceptance.sql` adds
-   `orders.terms_accepted_at`/`terms_version`, required by the checkout
-   insert (`src/lib/db.ts`). A sandbox D1 built by literally following the
-   old precondition would break checkout and invoicing immediately.
+   `orders.shipping_incl_vat`, `0015_terms_acceptance.sql` adds
+   `orders.terms_accepted_at`/`terms_version`, and `0016_customer_billing.sql`
+   adds the billing identity and Verifone Customer ID required by HPP 3DS.
+   A sandbox D1 built by literally following the old precondition would break
+   checkout and invoicing immediately.
    Re-verify this reference stays current as new migrations land.
 3. Do not touch the seeded `products` fixtures as if they were the real
    merchant catalog — the gate doc is explicit that no real catalog was

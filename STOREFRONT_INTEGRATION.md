@@ -36,7 +36,14 @@ Body:
 {
   "items": [{ "product_id": "LOPAPEYSA-M", "quantity": 1 }],
   "customer_email": "buyer@example.is",
-  "customer_name": "Buyer Name",
+  "billing": {
+    "first_name": "Buyer",
+    "last_name": "Name",
+    "address_1": "Laugavegur 1",
+    "city": "Reykjavík",
+    "country_code": "IS",
+    "postal_code": "101"
+  },
   "terms_accepted": true,
   "terms_version": "2026-08-17"
 }
@@ -47,6 +54,16 @@ Body:
 **Version bump procedure:** when the storefront terms page (`app/terms/page.tsx`) content changes, bump `TERMS_VERSION` in the storefront's `app/lib/compliance.ts` **and** the gateway's `src/lib/terms.ts` to the same new value (date-based, e.g. `2026-08-17`). The storefront ships a drift test pinning the value, so the two repos cannot silently diverge.
 
 Never send prices, totals, currency, product names, or payment state from the browser. The Worker resolves the catalog price and rejects client-controlled money fields.
+
+`customer_email` and `billing` are required for every new checkout because the
+gateway creates a Verifone Customer and attaches its ID to the HPP 3DS session.
+`billing.first_name`, `last_name`, `address_1`, `city`, `postal_code`, and a
+two-letter ISO 3166-1 `country_code` are mandatory. `state` and an E.123-style
+`phone` are optional. The gateway searches Verifone for an exact email/entity and
+billing match before creating a customer, so retries recover accepted-but-timed-
+out customer creation rather than blindly issuing another create request. Exact completed retries
+created before this requirement remain replayable; new and reclaimed attempts
+must satisfy the current contract.
 
 A successful response contains:
 
@@ -72,6 +89,12 @@ The storefront should:
 6. Show the authoritative amount and currency returned by the API before redirecting.
 
 The API returns `409 idempotency_conflict` if a key is reused with different checkout data. A completed retry returns the original order and checkout URL rather than creating a second payment session.
+
+## Cancelled checkout
+
+Verifone's Checkout API has no `cancel_url`. The documented field for an abandoned HPP is `shop_url`, which the gateway sets from `STOREFRONT_URL` on every checkout. A shopper who cancels lands back on the storefront root, not on `/api/return`.
+
+A cancel produces no provider event, so the order stays non-terminal (`checkout_created`) until it expires or the buyer retries. The storefront should treat a buyer arriving back at the store with a live `irja:order-session` as an abandoned attempt, not a failure: keep the cart, and mint a new idempotency key only once the cart contents actually change.
 
 ## Return and status recovery
 
@@ -111,6 +134,8 @@ Map stable API `code` values to customer-friendly text. Keep provider/internal e
 - `idempotency_conflict`: generate a new key only after confirming the cart is intentionally different.
 - `idempotency_processing`: wait for `Retry-After` and retry once.
 - `checkout_provider_unavailable`: preserve the cart and offer retry; do not claim payment failed.
+- `customer_details_required`, `customer_details_invalid`: keep the buyer on the checkout form and correct the contact/billing fields.
+- `customer_provider_unavailable`: preserve the cart and offer retry; no HPP session was created.
 - HTTP `429`: obey `Retry-After` and keep the pay button disabled until then.
 
 ## Architecture decision

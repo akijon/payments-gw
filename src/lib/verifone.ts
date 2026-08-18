@@ -1,5 +1,5 @@
 /**
- * Verifone API client — OAuth2 token, checkout creation, checkout verification
+ * Verifone API client — Basic Auth, checkout creation, checkout verification
  */
 
 import type { Env } from '../types/env';
@@ -14,20 +14,19 @@ import type {
   VerifoneCheckoutResponse,
 } from '../types/api';
 import { withCircuitBreaker } from './circuit-breaker';
-import { getOAuth2ClientCredentialsToken } from './oauth';
-
-// ─── OAuth2 token management ─────────────────────────────────────
-
-const TOKEN_KEY = 'verifone_oauth_token';
-const TOKEN_BUFFER_MS = 30_000; // refresh 30s before expiry
 const UPSTREAM_TIMEOUT_MS = 15_000;
 const MAX_DYNAMIC_DESCRIPTOR_LENGTH = 25;
 
 export interface BuildVerifoneCheckoutRequestParams {
   orderNumber: string;
-  amount: number; // minor units
+  amount: number; // whole krónur (ISK major units)
   currency: string; // ISO 4217 uppercase, e.g. "ISK"
   returnUrl: string;
+  /**
+   * Storefront URL Verifone redirects to when the shopper cancels the HPP.
+   * Verifone exposes no `cancel_url`; `shop_url` is the documented equivalent.
+   */
+  shopUrl?: string;
   /** Pre-created Verifone customer ID (see createCustomer) to attach for richer 3DS customer_details. */
   customer?: string;
   /** Short text shown on the cardholder's bank statement. Verifone caps this at 25 chars. */
@@ -38,6 +37,26 @@ export interface BuildVerifoneCheckoutRequestParams {
 
 function upstreamError(operation: string, response: Response): Error {
   return new Error(`${operation} failed with HTTP ${response.status}`);
+}
+
+/** Build Verifone's documented RFC 7617 user-UUID/API-key credential. */
+export function buildVerifoneAuthorization(env: Env): string {
+  const userId = env.VERIFONE_USER_ID?.trim();
+  const apiKey = env.VERIFONE_API_KEY?.trim();
+  const printableAscii = /^[\x21-\x7e]+$/;
+  if (!userId || !apiKey || userId.includes(':') || !printableAscii.test(userId) || !printableAscii.test(apiKey)) {
+    throw new Error('Invalid Verifone Basic Auth credentials');
+  }
+  return `Basic ${btoa(`${userId}:${apiKey}`)}`;
+}
+
+/** Absolute, parseable, and https — the only shape safe to hand a shopper as a redirect target. */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** Non-empty after trim → usable contract ID; otherwise treat as unset. */
@@ -97,6 +116,9 @@ export function buildVerifoneCheckoutRequest(
   if (params.dynamicDescriptor && params.dynamicDescriptor.length > MAX_DYNAMIC_DESCRIPTOR_LENGTH) {
     throw new Error(`dynamicDescriptor exceeds Verifone's ${MAX_DYNAMIC_DESCRIPTOR_LENGTH}-character limit`);
   }
+  if (params.shopUrl !== undefined && !isHttpsUrl(params.shopUrl)) {
+    throw new Error('shopUrl must be an absolute https URL');
+  }
 
   const configurations: VerifoneCheckoutConfigurations = {
     card: {
@@ -106,6 +128,7 @@ export function buildVerifoneCheckoutRequest(
       threed_secure: {
         enabled: true,
         threeds_contract_id: env.VERIFONE_3DS_CONTRACT_ID,
+        transaction_mode: 'S',
         ...(params.authenticationIndicator ? { authentication_indicator: params.authenticationIndicator } : {}),
         ...(params.challengeIndicator ? { challenge_indicator: params.challengeIndicator } : {}),
       },
@@ -132,25 +155,11 @@ export function buildVerifoneCheckoutRequest(
     amount: params.amount,
     merchant_reference: params.orderNumber,
     return_url: params.returnUrl,
+    ...(params.shopUrl ? { shop_url: params.shopUrl } : {}),
     interaction_type: 'HPP',
     ...(params.customer ? { customer: params.customer } : {}),
     configurations,
   };
-}
-
-export async function getVerifoneToken(env: Env): Promise<string> {
-  return getOAuth2ClientCredentialsToken({
-    cache: env.CACHE,
-    cacheKey: TOKEN_KEY,
-    breakerKey: 'verifone',
-    tokenUrl: env.VERIFONE_OAUTH_URL,
-    clientId: env.VERIFONE_CLIENT_ID,
-    clientSecret: env.VERIFONE_CLIENT_SECRET,
-    scope: env.VERIFONE_SCOPE,
-    operation: 'Verifone OAuth2',
-    bufferMs: TOKEN_BUFFER_MS,
-    timeoutMs: UPSTREAM_TIMEOUT_MS,
-  });
 }
 
 // ─── Create checkout session ────────────────────────────────────
@@ -160,15 +169,15 @@ export async function createCheckout(
   params: BuildVerifoneCheckoutRequestParams,
 ): Promise<{ checkoutId: string; checkoutUrl: string }> {
   // Validation + configurations live in the pure builder so unit tests can
-  // pin HPP method gating without mocking fetch/OAuth.
+  // pin HPP method gating without mocking fetch/authentication.
   const body = buildVerifoneCheckoutRequest(env, params);
-  const token = await getVerifoneToken(env);
+  const authorization = buildVerifoneAuthorization(env);
 
   const resp = await withCircuitBreaker('verifone', () =>
     fetch(`${env.VERIFONE_API_BASE}/v2/checkout`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         'Content-Type': 'application/json',
         Accept: '*/*',
       },
@@ -204,44 +213,121 @@ export async function createCheckout(
 
 export interface CreateCustomerParams {
   email: string;
-  firstName?: string;
-  lastName?: string;
-  billingAddress1?: string;
-  billingCity?: string;
-  billingCountryCode?: string;
-  billingPostalCode?: string;
+  firstName: string;
+  lastName: string;
+  billingAddress1: string;
+  billingCity: string;
+  billingCountryCode: string;
+  billingPostalCode: string;
   billingState?: string;
+  billingPhone?: string;
+}
+
+interface VerifoneCustomerRecord {
+  id?: unknown;
+  entity_id?: unknown;
+  email_address?: unknown;
+  billing?: Partial<VerifoneBilling>;
+}
+
+function rsqlQuoted(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function isMatchingCustomer(record: VerifoneCustomerRecord, env: Env, params: CreateCustomerParams): boolean {
+  const billing = record.billing;
+  return (
+    typeof record.id === 'string' &&
+    record.id.length > 0 &&
+    record.id.length <= 256 &&
+    record.entity_id === env.VERIFONE_ENTITY_ID &&
+    typeof record.email_address === 'string' &&
+    record.email_address.toLowerCase() === params.email.toLowerCase() &&
+    billing?.first_name === params.firstName &&
+    billing.last_name === params.lastName &&
+    billing.address_1 === params.billingAddress1 &&
+    billing.city === params.billingCity &&
+    billing.country_code === params.billingCountryCode &&
+    billing.postal_code === params.billingPostalCode &&
+    (billing.state ?? undefined) === params.billingState &&
+    (billing.phone ?? undefined) === params.billingPhone
+  );
 }
 
 export async function createCustomer(env: Env, params: CreateCustomerParams): Promise<string> {
   if (!params.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email)) {
     throw new Error('Invalid customer email');
   }
-  const token = await getVerifoneToken(env);
+  if (
+    !params.firstName?.trim() ||
+    params.firstName.length > 22 ||
+    !params.lastName?.trim() ||
+    params.lastName.length > 22 ||
+    !params.billingAddress1?.trim() ||
+    params.billingAddress1.length > 40 ||
+    !params.billingCity?.trim() ||
+    params.billingCity.length > 28 ||
+    !params.billingPostalCode?.trim() ||
+    params.billingPostalCode.length > 10 ||
+    !/^[A-Z]{2}$/.test(params.billingCountryCode) ||
+    (params.billingState !== undefined && (!params.billingState.trim() || params.billingState.length > 35)) ||
+    (params.billingPhone !== undefined && !/^\+?[0-9]{7,25}$/.test(params.billingPhone))
+  ) {
+    throw new Error('Missing or invalid Verifone customer billing fields');
+  }
+  const authorization = buildVerifoneAuthorization(env);
+  const customerEndpoint = `${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`;
+
+  // Customer creation has no documented idempotency key. Recover accepted-but-
+  // timed-out creates and reuse prior exact profiles before issuing another POST.
+  const listUrl = new URL(customerEndpoint);
+  listUrl.searchParams.set(
+    'search',
+    `email_address==${rsqlQuoted(params.email)};entity_id==${rsqlQuoted(env.VERIFONE_ENTITY_ID)}`,
+  );
+  listUrl.searchParams.set('page_size', '50');
+  listUrl.searchParams.set('page_number', '1');
+  const listResponse = await withCircuitBreaker('verifone-customer', () =>
+    fetch(listUrl.toString(), {
+      method: 'GET',
+      headers: { Authorization: authorization, Accept: 'application/json' },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }),
+  );
+  if (!listResponse.ok) throw upstreamError('Verifone listCustomers', listResponse);
+  const customers = (await listResponse.json()) as unknown;
+  if (!Array.isArray(customers) || customers.length > 50) {
+    throw new Error('Verifone listCustomers returned an invalid response');
+  }
+  const existing = customers.find((customer) => isMatchingCustomer(customer as VerifoneCustomerRecord, env, params));
+  if (existing && typeof (existing as VerifoneCustomerRecord).id === 'string') {
+    return (existing as VerifoneCustomerRecord).id as string;
+  }
 
   // Verifone's Customer API schema has no top-level first_name/last_name or
   // email fields — those live at email_address and billing.first_name/last_name.
   const billing: VerifoneBilling = {
-    ...(params.firstName ? { first_name: params.firstName } : {}),
-    ...(params.lastName ? { last_name: params.lastName } : {}),
-    ...(params.billingAddress1 ? { address_1: params.billingAddress1 } : {}),
-    ...(params.billingCity ? { city: params.billingCity } : {}),
-    ...(params.billingCountryCode ? { country_code: params.billingCountryCode } : {}),
-    ...(params.billingPostalCode ? { postal_code: params.billingPostalCode } : {}),
+    first_name: params.firstName,
+    last_name: params.lastName,
+    address_1: params.billingAddress1,
+    city: params.billingCity,
+    country_code: params.billingCountryCode,
+    postal_code: params.billingPostalCode,
     ...(params.billingState ? { state: params.billingState } : {}),
+    ...(params.billingPhone ? { phone: params.billingPhone } : {}),
   };
 
   const body = {
     entity_id: env.VERIFONE_ENTITY_ID,
     email_address: params.email,
-    ...(Object.keys(billing).length > 0 ? { billing } : {}),
+    billing,
   };
 
   const resp = await withCircuitBreaker('verifone-customer', () =>
-    fetch(`${env.VERIFONE_API_BASE.replace('/checkout-service', '/customer-service')}/v2/customer`, {
+    fetch(customerEndpoint, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         'Content-Type': 'application/json',
         Accept: '*/*',
       },
@@ -267,13 +353,13 @@ export async function getCheckout(env: Env, checkoutId: string): Promise<Verifon
   if (!/^[A-Za-z0-9._:-]{1,256}$/.test(checkoutId)) {
     throw new Error('Invalid Verifone checkout ID');
   }
-  const token = await getVerifoneToken(env);
+  const authorization = buildVerifoneAuthorization(env);
 
   const resp = await withCircuitBreaker('verifone', () =>
     fetch(`${env.VERIFONE_API_BASE}/v2/checkout/${encodeURIComponent(checkoutId)}`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         Accept: '*/*',
       },
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),

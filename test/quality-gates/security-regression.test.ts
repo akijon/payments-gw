@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
+import { TEST_CHECKOUT_CUSTOMER } from '../fixtures/checkout-customer';
 
 vi.mock('../../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'chk-sec-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-sec-1',
@@ -38,6 +38,7 @@ describe('Security Regression Detection', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({
+          ...TEST_CHECKOUT_CUSTOMER,
           items: [
             {
               name: 'Expensive Item',
@@ -61,6 +62,7 @@ describe('Security Regression Detection', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({
+          ...TEST_CHECKOUT_CUSTOMER,
           items: [
             {
               name: 'Hoodie',
@@ -85,6 +87,7 @@ describe('Security Regression Detection', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({
+          ...TEST_CHECKOUT_CUSTOMER,
           items: [
             {
               product_id: 'NONEXISTENT-SKU-999',
@@ -103,6 +106,7 @@ describe('Security Regression Detection', () => {
 
     it('MUST require product_id instead of client prices in secure implementation', async () => {
       const secureRequest = {
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [
           { product_id: 'HOODIE-BLK-M', quantity: 2 },
           { product_id: 'TSHIRT-WHT-L', quantity: 1 },
@@ -221,7 +225,12 @@ describe('Security Regression Detection', () => {
         const response = await SELF.fetch('http://localhost/api/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
-          body: JSON.stringify({ items: [item], terms_accepted: true, terms_version: '2026-08-17' }),
+          body: JSON.stringify({
+            ...TEST_CHECKOUT_CUSTOMER,
+            items: [item],
+            terms_accepted: true,
+            terms_version: '2026-08-17',
+          }),
         });
 
         expect([400, 422]).toContain(response.status);

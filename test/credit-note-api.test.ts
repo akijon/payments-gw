@@ -13,7 +13,6 @@ import { TERMS_VERSION } from '../src/lib/terms';
 
 // Mock the Verifone API client (same as invoice-api.test.ts)
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'chk-test-1',
     checkoutUrl: 'https://pay.mock.verifone/chk-1',

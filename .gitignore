@@ -11,6 +11,7 @@ dist/
 .dev.vars
 .dev.vars.*
 !.dev.vars.example
+verifone_information.vars
 wrangler.production.toml
 *.pem
 *.key

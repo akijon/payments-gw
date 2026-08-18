@@ -2,7 +2,7 @@
  * D1 query helpers — centralized access to the database
  */
 
-import type { Order, OrderStatus, LineItem, PaymentMethod } from '../types/api';
+import type { CheckoutBillingDetails, Order, OrderStatus, LineItem, PaymentMethod } from '../types/api';
 
 // ─── Order queries ──────────────────────────────────────────────
 
@@ -160,6 +160,15 @@ interface OrderRow {
   amount: number;
   customer_email: string | null;
   customer_name: string | null;
+  billing_first_name: string | null;
+  billing_last_name: string | null;
+  billing_address_1: string | null;
+  billing_city: string | null;
+  billing_country_code: string | null;
+  billing_postal_code: string | null;
+  billing_state: string | null;
+  billing_phone: string | null;
+  verifone_customer_id: string | null;
   buyer_kennitala: string | null;
   items_json: string;
   shipping_incl_vat: number | null;
@@ -180,6 +189,24 @@ function storedPaymentMethod(value: string | null): PaymentMethod {
 }
 
 function rowToOrder(row: OrderRow): Order {
+  const billing =
+    row.billing_first_name &&
+    row.billing_last_name &&
+    row.billing_address_1 &&
+    row.billing_city &&
+    row.billing_country_code &&
+    row.billing_postal_code
+      ? {
+          first_name: row.billing_first_name,
+          last_name: row.billing_last_name,
+          address_1: row.billing_address_1,
+          city: row.billing_city,
+          country_code: row.billing_country_code,
+          postal_code: row.billing_postal_code,
+          ...(row.billing_state ? { state: row.billing_state } : {}),
+          ...(row.billing_phone ? { phone: row.billing_phone } : {}),
+        }
+      : undefined;
   return {
     id: row.id,
     order_number: row.order_number,
@@ -188,6 +215,8 @@ function rowToOrder(row: OrderRow): Order {
     amount: row.amount,
     customer_email: row.customer_email ?? undefined,
     customer_name: row.customer_name ?? undefined,
+    billing,
+    verifone_customer_id: row.verifone_customer_id ?? undefined,
     buyer_kennitala: row.buyer_kennitala ?? undefined,
     items: JSON.parse(row.items_json),
     // Predates migration 0014 on rows written before the column existed; those
@@ -241,6 +270,7 @@ export async function createOrderWithAccessToken(
     amount: number;
     customerEmail?: string;
     customerName?: string;
+    billing?: CheckoutBillingDetails;
     buyerKennitala?: string;
     /** ISO-8601 timestamp of the buyer's terms-of-sale acceptance. */
     termsAcceptedAt: string;
@@ -253,8 +283,12 @@ export async function createOrderWithAccessToken(
   await db.batch([
     db
       .prepare(
-        `INSERT INTO orders (id, order_number, status, currency, amount, customer_email, customer_name, buyer_kennitala, terms_accepted_at, terms_version, items_json)
-       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO orders (
+           id, order_number, status, currency, amount, customer_email, customer_name,
+           billing_first_name, billing_last_name, billing_address_1, billing_city,
+           billing_country_code, billing_postal_code, billing_state, billing_phone,
+           buyer_kennitala, terms_accepted_at, terms_version, items_json
+         ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         params.id,
@@ -263,6 +297,14 @@ export async function createOrderWithAccessToken(
         params.amount,
         params.customerEmail ?? null,
         params.customerName ?? null,
+        params.billing?.first_name ?? null,
+        params.billing?.last_name ?? null,
+        params.billing?.address_1 ?? null,
+        params.billing?.city ?? null,
+        params.billing?.country_code ?? null,
+        params.billing?.postal_code ?? null,
+        params.billing?.state ?? null,
+        params.billing?.phone ?? null,
         params.buyerKennitala ?? null,
         params.termsAcceptedAt,
         params.termsVersion,
@@ -272,6 +314,24 @@ export async function createOrderWithAccessToken(
       .prepare('INSERT INTO order_access_tokens (order_id, token_hash) VALUES (?, ?)')
       .bind(params.id, await hashAccessToken(params.accessToken)),
   ]);
+}
+
+export async function setOrderVerifoneCustomerId(
+  db: D1Database,
+  orderId: string,
+  verifoneCustomerId: string,
+): Promise<void> {
+  const result = await db
+    .prepare(
+      `UPDATE orders
+       SET verifone_customer_id = ?, updated_at = datetime('now')
+       WHERE id = ? AND status = 'pending' AND verifone_customer_id IS NULL`,
+    )
+    .bind(verifoneCustomerId, orderId)
+    .run();
+  if ((result.meta.changes ?? 0) !== 1) {
+    throw new Error('Order changed before Verifone customer persistence');
+  }
 }
 
 export interface CheckoutAttempt {
@@ -428,6 +488,7 @@ export interface AtomicCheckoutCreationFailure {
   orderId: string;
   eventId: string;
   rawPayload: string;
+  eventType?: 'checkout_creation_failed' | 'customer_creation_failed';
 }
 
 /** Commit provider-creation failure state and its audit event together. */
@@ -454,13 +515,58 @@ export async function failCheckoutCreationAtomically(
     db
       .prepare(
         `INSERT INTO payment_events (id, order_id, event_type, source, raw_payload, verified)
-         SELECT ?, ?, 'checkout_creation_failed', 'verifone_api', ?, 0
+         SELECT ?, ?, ?, 'verifone_api', ?, 0
          WHERE changes() = 1`,
       )
-      .bind(input.eventId, input.orderId, input.rawPayload),
+      .bind(input.eventId, input.orderId, input.eventType ?? 'checkout_creation_failed', input.rawPayload),
   ]);
 
   return results.every((result) => (result.meta.changes ?? 0) === 1);
+}
+
+export async function reclaimCustomerCreationFailure(
+  db: D1Database,
+  input: { keyHash: string; requestHash: string; orderId: string },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE checkout_attempts
+       SET order_id = ?, status = 'processing', checkout_url = NULL, updated_at = datetime('now')
+       WHERE key_hash = ? AND request_hash = ? AND status = 'failed'
+         AND EXISTS (
+           SELECT 1 FROM payment_events
+           WHERE payment_events.order_id = checkout_attempts.order_id
+             AND payment_events.event_type = 'customer_creation_failed'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM payment_events
+           WHERE payment_events.order_id = checkout_attempts.order_id
+             AND payment_events.event_type IN ('checkout_provider_result', 'checkout_created')
+         )`,
+    )
+    .bind(input.orderId, input.keyHash, input.requestHash)
+    .run();
+  return (result.meta.changes ?? 0) === 1;
+}
+
+export async function renewCheckoutAttemptLease(
+  db: D1Database,
+  input: { keyHash: string; orderId: string },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE checkout_attempts
+       SET updated_at = datetime('now')
+       WHERE key_hash = ? AND order_id = ? AND status = 'processing' AND checkout_url IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM payment_events
+           WHERE payment_events.order_id = checkout_attempts.order_id
+             AND payment_events.event_type = 'checkout_provider_result'
+         )`,
+    )
+    .bind(input.keyHash, input.orderId)
+    .run();
+  return (result.meta.changes ?? 0) === 1;
 }
 
 const STALE_CHECKOUT_ATTEMPT_SECONDS = 45;

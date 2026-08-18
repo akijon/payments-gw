@@ -11,7 +11,7 @@ export interface Product {
   id: string;
   name: string;
   description?: string;
-  unit_price: number; // minor units
+  unit_price: number; // whole krónur (ISK major units)
   currency: string;
   active: boolean;
   vat_rate: number; // 24, 11, or 0

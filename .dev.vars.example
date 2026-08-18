@@ -1,7 +1,6 @@
 # Verifone API Credentials (sandbox — replace with production for go-live)
-VERIFONE_CLIENT_ID="sandbox-client-id-placeholder"
-VERIFONE_CLIENT_SECRET="sandbox-client-secret-placeholder"
-VERIFONE_SCOPE="checkout"
+VERIFONE_USER_ID="sandbox-user-uuid-placeholder"
+VERIFONE_API_KEY="sandbox-api-key-placeholder"
 VERIFONE_ENTITY_ID="sandbox-entity-id-placeholder"
 VERIFONE_PAYMENT_CONTRACT_ID="sandbox-payment-contract-placeholder"
 VERIFONE_3DS_CONTRACT_ID="sandbox-3ds-contract-placeholder"

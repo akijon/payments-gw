@@ -3,8 +3,11 @@
  * sequential numbering, and invoice assembly.
  *
  * VAT rates: 24% standard, 11% reduced (food, books, lodging), 0% exempt.
- * All amounts in minor units (aurar for ISK). Rounding follows Icelandic
- * standard: half-up to nearest whole króna (1 ISK = 100 aurar).
+ * All amounts are integers in ISK major units (whole krónur) — not aurar.
+ * Rounding follows the Icelandic standard: half-up to the nearest króna.
+ *
+ * The VAT reverse-extraction below (`* 100 / (100 + rate)`) is a percentage
+ * calculation, not a unit conversion, so it is unaffected by that choice.
  *
  * Legal basis: Lög um virðisaukaskatt nr. 50/1988, reglugerð nr. 505/2013.
  */
@@ -31,12 +34,16 @@ export const VALID_VAT_RATES: ReadonlySet<number> = new Set([0, 11, 24]);
 // ─── Rounding ───────────────────────────────────────────────────
 
 /**
- * Round half-up to nearest whole króna (100 aurar).
- * ISK has no fractional unit in practice; prices are whole krónur.
- * Minor units are aurar (1 ISK = 100 aurar), so we round to nearest 100.
+ * Round half-up to the nearest whole króna.
+ *
+ * Amounts throughout this service are whole krónur (ISK major units), not
+ * aurar, so rounding to a króna is plain half-up rounding. This previously
+ * did `Math.round(x / 100) * 100` on the assumption of aurar, which quantised
+ * every amount to the nearest 100 kr — turning a legitimate 18.050 kr total
+ * into 18.100 kr.
  */
-export function roundToIsk(minorUnits: number): number {
-  return Math.round(minorUnits / 100) * 100;
+export function roundToIsk(amount: number): number {
+  return Math.round(amount);
 }
 
 // ─── Kennitala validation ──────────────────────────────────────

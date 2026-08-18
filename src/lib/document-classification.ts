@@ -19,7 +19,7 @@ export interface DocumentClassification {
  * Implements the fallback rule: under 50k ISK + no valid kennitala = receipt.
  */
 export function classifyDocument(params: {
-  amount: number; // in minor units (aurar)
+  amount: number; // whole krónur (ISK major units)
   buyerKennitala?: string | null;
   customerName?: string | null;
   hasCompanyIndicators?: boolean;
@@ -55,7 +55,7 @@ export function classifyDocument(params: {
   return {
     documentType: 'sölukvittun',
     requiresKennitala: false,
-    reason: `Consumer transaction without kennitala - receipt issued (${Math.round(amount / 100)} ISK)`,
+    reason: `Consumer transaction without kennitala - receipt issued (${amount} ISK)`,
   };
 }
 

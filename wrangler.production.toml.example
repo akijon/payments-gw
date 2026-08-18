@@ -16,7 +16,6 @@ STOREFRONT_URL = "https://irja.is"
 # public origin. Whichever is chosen, GET <origin>/api/return must reach here.
 PUBLIC_API_URL = "REPLACE_ME_PUBLIC_RETURN_ORIGIN"
 VERIFONE_API_BASE = "https://emea.gsc.verifone.cloud/oidc/checkout-service"
-VERIFONE_OAUTH_URL = "https://emea.vam.verifone.cloud/oauth2/realms/root/realms/VerifoneServices/access_token"
 LANDSBANKINN_API_BASE = "https://api.landsbankinn.is/api/Acquiring/Acquiring/v1"
 LANDSBANKINN_OAUTH_URL = "https://api.landsbankinn.is/oauth2/access_token"
 

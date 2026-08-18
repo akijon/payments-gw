@@ -9,7 +9,6 @@ compatibility_flags = ["nodejs_compat"]
 ENVIRONMENT = "test"
 STOREFRONT_URL = "https://test.example.com"
 VERIFONE_API_BASE = "https://api.test.verifone/checkout-service"
-VERIFONE_OAUTH_URL = "https://oauth.test.verifone/access_token"
 LANDSBANKINN_API_BASE = "https://api.test.landsbankinn.is/acquiring/v1"
 LANDSBANKINN_OAUTH_URL = "https://oauth.test.landsbankinn.is/access_token"
 SELLER_NAME = "Irja ehf."

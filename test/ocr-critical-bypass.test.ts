@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
+import { TEST_CHECKOUT_CUSTOMER } from './fixtures/checkout-customer';
 
 vi.mock('../src/lib/verifone', () => ({
-  getVerifoneToken: vi.fn().mockResolvedValue('mock-token'),
   createCheckout: vi.fn().mockResolvedValue({
     checkoutId: 'test-checkout-id',
     checkoutUrl: 'https://test.verifone.com/checkout/test-checkout-id',
@@ -29,11 +29,12 @@ beforeEach(async () => {
 describe('ocr critical finding — consistent-price bypass attempt', () => {
   it('rejects internally CONSISTENT unit_price x quantity === total_amount', async () => {
     // Passes Math.trunc equality: 1 * 2 === 2. If 143-159 were the only
-    // gate, this would sail through and buy a hoodie for 2 aurar.
+    // gate, this would sail through and buy a hoodie for 2 kr.
     const res = await SELF.fetch('https://example.com/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 2, unit_price: 1, total_amount: 2 }],
         customer_email: 'attacker@example.com',
         terms_accepted: true,
@@ -51,6 +52,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, total_amount: 1 }],
         customer_email: 'attacker@example.com',
         terms_accepted: true,
@@ -67,6 +69,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 1, unit_price: 0, total_amount: 0 }],
         customer_email: 'attacker@example.com',
         terms_accepted: true,
@@ -83,6 +86,7 @@ describe('ocr critical finding — consistent-price bypass attempt', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({
+        ...TEST_CHECKOUT_CUSTOMER,
         items: [{ product_id: 'HOODIE-BLK-M', quantity: 2 }],
         customer_email: 'buyer@example.com',
         terms_accepted: true,

@@ -1,189 +1,290 @@
-import { describe, it, expect } from 'vitest';
+/**
+ * Financial integrity gate — the unit-scale invariant.
+ *
+ * This gate exists because of a real 100x overcharge: the storefront's catalog
+ * generator wrote `unit_price = priceIsk * 100` on an "aurar" assumption, while
+ * ISK is charged in MAJOR units (whole krónur). The gateway forwards
+ * `unit_price` to Verifone as the checkout `amount`, so an 8.900 kr valve would
+ * have been billed as 890.000 kr.
+ *
+ * The invariant that would have caught it, and that this file pins:
+ *
+ *   D1 unit_price x quantity
+ *     === order.amount (persisted)
+ *     === response.amount (shown to the buyer)
+ *     === amount sent to Verifone
+ *
+ * Most assertions below read the price from D1 rather than hardcoding it, so a
+ * scaling bug in the resolver or request builder breaks this file. That alone
+ * does not cover a regression in the catalog seed or loader: if `unit_price`
+ * itself is written 100x, the expectation and the actual scale together and
+ * every relative assertion still holds. One case therefore pins the seeded
+ * price to an independently stated whole-króna literal, which is the only
+ * assertion here that a 100x catalog regression cannot satisfy.
+ *
+ * Assertions over literal arithmetic alone (`expect(1500 + 250).toBe(1750)`)
+ * test JavaScript rather than this system; the previous version of this file
+ * consisted entirely of those and imported nothing from `src/`.
+ *
+ * Related coverage: `test/pricing-integrity.test.ts` (invoice vs charged
+ * amount), `test/price-manipulation.test.ts` (client-supplied prices),
+ * `test/invoice-computation.test.ts` (VAT decomposition).
+ */
 
-describe('Financial Integrity Validation', () => {
-  describe('Monetary Arithmetic Precision', () => {
-    it('handles ISK minor units (aurar) correctly', () => {
-      // ISK: 1 krona = 100 aurar
-      const price1 = 150000; // 1,500.00 ISK in aurar
-      const price2 = 25050; // 250.50 ISK in aurar
-      const quantity = 3;
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SELF, env } from 'cloudflare:test';
+import { TERMS_VERSION } from '../../src/lib/terms';
+import { buildVerifoneCheckoutRequest } from '../../src/lib/verifone';
+import { computeInvoice } from '../../src/lib/invoice-computation';
+import type { Env } from '../../src/types/env';
+import type * as VerifoneModule from '../../src/lib/verifone';
 
-      const total = (price1 + price2) * quantity;
-      expect(total).toBe(525150); // 5,251.50 ISK in aurar
-    });
+vi.mock('../../src/lib/verifone', async (importOriginal) => {
+  // Keep the real request builder — it is under test here — and stub only the
+  // network calls. Mocking the builder would defeat the purpose of the gate.
+  const actual = await importOriginal<typeof VerifoneModule>();
+  return {
+    ...actual,
+    createCheckout: vi.fn().mockResolvedValue({
+      checkoutId: 'chk-integrity-1',
+      checkoutUrl: 'https://pay.mock.verifone/chk-integrity-1',
+    }),
+    createCustomer: vi.fn().mockResolvedValue('cust-integrity-1'),
+    getCheckout: vi.fn(),
+  };
+});
 
-    it('prevents floating-point precision errors in currency calculations', () => {
-      // Common JS floating-point trap: 0.1 + 0.2 !== 0.3
-      // Always use integer minor units for exact arithmetic
+const TEST_CUSTOMER = {
+  customer_email: 'shopper@example.com',
+  billing: {
+    first_name: 'Jón',
+    last_name: 'Jónsson',
+    address_1: 'Laugavegur 1',
+    city: 'Reykjavík',
+    country_code: 'IS',
+    postal_code: '101',
+  },
+} as const;
 
-      // Convert to aurar first, then calculate
-      const price1InAurar = Math.round(149.99 * 100); // 14999 aurar
-      const price2InAurar = Math.round(50.01 * 100); // 5001 aurar
+async function catalogPrice(productId: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT unit_price FROM products WHERE id = ?').bind(productId).first();
+  if (!row) throw new Error(`Catalog fixture missing: ${productId}`);
+  return row.unit_price as number;
+}
 
-      const total = price1InAurar + price2InAurar;
-      expect(total).toBe(20000); // Exactly 200.00 ISK = 20000 aurar
+beforeEach(async () => {
+  vi.clearAllMocks();
+  await env.DB.exec(
+    'DELETE FROM checkout_attempts; DELETE FROM order_access_tokens; DELETE FROM payment_events; DELETE FROM processed_webhooks; DELETE FROM orders;',
+  );
+});
 
-      // Verify conversion back to ISK is exact
-      expect(total / 100).toBe(200.0);
-    });
+describe('financial integrity: catalog price reaches the provider unscaled', () => {
+  // Independent anchor. Every other case in this describe reads its price from
+  // D1, so a seed or loader that reintroduces `priceIsk * 100` scales the
+  // expectation and the actual together and those cases still pass. This one
+  // states the seeded price as a literal, in whole krónur, so a 100x catalog
+  // regression fails here even though the chain is internally consistent.
+  // Update this constant deliberately when the seed price legitimately changes.
+  const SEEDED_HOODIE_ISK = 8900;
 
-    it('handles edge cases in monetary arithmetic', () => {
-      // Zero amounts
-      // oxlint-disable-next-line oxc/erasing-op -- intentionally verifying the zero-amount case
-      expect(0 * 5).toBe(0);
-
-      // Single aurar (smallest unit)
-      expect(1 * 100).toBe(100); // 1 aurar * 100 quantity
-
-      // Large amounts (within safe integer range)
-      const largePrice = 999999999; // 9,999,999.99 ISK in aurar
-      expect(largePrice + 1).toBe(1000000000); // Still exact
-    });
-
-    it('validates safe integer limits for financial calculations', () => {
-      // JavaScript safe integer limit: Number.MAX_SAFE_INTEGER = 9,007,199,254,740,991
-      // In aurar: 90,071,992,547,409.91 ISK (way beyond normal transaction limits)
-
-      const maxSafeAurar = Number.MAX_SAFE_INTEGER;
-      const maxSafeISK = maxSafeAurar / 100;
-
-      expect(Number.isSafeInteger(maxSafeAurar)).toBe(true);
-      expect(maxSafeISK).toBe(90071992547409.91);
-
-      // Verify we can safely add 1 aurar to large amounts
-      const largeTransaction = 1000000000; // 10,000,000.00 ISK
-      expect(Number.isSafeInteger(largeTransaction + 1)).toBe(true);
-    });
+  it('pins the seeded catalog price to a known whole-króna value', async () => {
+    expect(await catalogPrice('HOODIE-BLK-M')).toBe(SEEDED_HOODIE_ISK);
   });
 
-  describe('Server-Side Price Authority', () => {
-    // Mock product catalog for testing
-    const mockCatalog = new Map([
-      ['HOODIE-BLK-M', { name: 'Black Hoodie M', price: 8900 }], // 89.00 ISK
-      ['TSHIRT-WHT-L', { name: 'White T-Shirt L', price: 4500 }], // 45.00 ISK
-      ['JEANS-BLUE-32', { name: 'Blue Jeans 32', price: 12000 }], // 120.00 ISK
-    ]);
+  it('charges the independently known price, not a scaled one', async () => {
+    const quantity = 2;
 
-    function calculateSecureTotal(
-      items: Array<{ product_id: string; quantity: number }>,
-      catalog: Map<string, { name: string; price: number }>,
-    ): number {
-      return items.reduce((total, item) => {
-        const product = catalog.get(item.product_id);
-        if (!product) {
-          throw new Error(`Unknown product: ${item.product_id}`);
-        }
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'HOODIE-BLK-M', quantity }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+    expect(resp.status).toBe(200);
+    const data = (await resp.json()) as { amount: number };
 
-        if (item.quantity <= 0) {
-          throw new Error(`Invalid quantity: ${item.quantity}`);
-        }
+    const { createCheckout } = await import('../../src/lib/verifone');
+    const sent = vi.mocked(createCheckout).mock.calls.at(-1)?.[1];
 
-        return total + product.price * item.quantity;
-      }, 0);
+    // 17.800 kr, not 1.780.000 kr.
+    expect(data.amount).toBe(SEEDED_HOODIE_ISK * quantity);
+    expect(sent?.amount).toBe(SEEDED_HOODIE_ISK * quantity);
+  });
+
+  it('carries D1 unit_price through to the amount sent to Verifone, unmodified', async () => {
+    const unitPrice = await catalogPrice('HOODIE-BLK-M');
+    const quantity = 2;
+    const expected = unitPrice * quantity;
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'HOODIE-BLK-M', quantity }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+    expect(resp.status).toBe(200);
+    const data = (await resp.json()) as { order_id: string; amount: number };
+
+    // 1. what the buyer is shown
+    expect(data.amount).toBe(expected);
+
+    // 2. what is persisted
+    const order = await env.DB.prepare('SELECT amount FROM orders WHERE id = ?').bind(data.order_id).first();
+    expect(order!.amount).toBe(expected);
+
+    // 3. what the provider is asked to charge — the step that actually moves money
+    const { createCheckout } = await import('../../src/lib/verifone');
+    const sent = vi.mocked(createCheckout).mock.calls.at(-1)?.[1];
+    expect(sent?.amount).toBe(expected);
+    expect(sent?.currency).toBe('ISK');
+  });
+
+  it('does not scale the amount by 100 in either direction', async () => {
+    const unitPrice = await catalogPrice('LOPAPEYSA-M');
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'LOPAPEYSA-M', quantity: 1 }],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+    expect(resp.status).toBe(200);
+    const { amount } = (await resp.json()) as { amount: number };
+
+    expect(amount).not.toBe(unitPrice * 100);
+    expect(amount).not.toBe(Math.round(unitPrice / 100));
+    expect(amount).toBe(unitPrice);
+  });
+
+  it('sums a mixed cart from D1 prices across quantities', async () => {
+    const [hoodie, shirt] = await Promise.all([catalogPrice('HOODIE-BLK-M'), catalogPrice('TSHIRT-WHT-L')]);
+
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [
+          { product_id: 'HOODIE-BLK-M', quantity: 3 },
+          { product_id: 'TSHIRT-WHT-L', quantity: 1 },
+        ],
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+    expect(resp.status).toBe(200);
+    const { amount } = (await resp.json()) as { amount: number };
+
+    expect(amount).toBe(hoodie * 3 + shirt);
+  });
+
+  it('rejects a checkout that carries client-supplied money fields', async () => {
+    // The server does not merely ignore client totals — it refuses the request,
+    // so a tampered cart can never be priced at all.
+    const resp = await SELF.fetch('https://test.example.com/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        ...TEST_CUSTOMER,
+        items: [{ product_id: 'HOODIE-BLK-M', quantity: 1 }],
+        amount: 1,
+        total_amount: 1,
+        terms_accepted: true,
+        terms_version: TERMS_VERSION,
+      }),
+    });
+
+    expect(resp.status).toBe(400);
+  });
+});
+
+describe('financial integrity: money crossing the provider boundary is a safe integer', () => {
+  function env0(): Env {
+    return {
+      VERIFONE_ENTITY_ID: 'entity-1',
+      VERIFONE_PAYMENT_CONTRACT_ID: 'card-ppc-1',
+      VERIFONE_3DS_CONTRACT_ID: '3ds-contract-1',
+    } as Env;
+  }
+
+  const params = {
+    orderNumber: 'ORD-INTEGRITY-1',
+    currency: 'ISK',
+    returnUrl: 'https://api.example.test/api/return?order_id=ord-1',
+  };
+
+  it('passes representative ISK shelf prices through the builder unchanged', () => {
+    for (const amount of [3900, 4990, 8900, 14_500, 18_000, 55_000]) {
+      const body = buildVerifoneCheckoutRequest(env0(), { ...params, amount });
+      expect(body.amount).toBe(amount);
+      expect(body.currency_code).toBe('ISK');
     }
-
-    it('calculates totals from product catalog only', () => {
-      const items = [
-        { product_id: 'HOODIE-BLK-M', quantity: 2 },
-        { product_id: 'TSHIRT-WHT-L', quantity: 1 },
-      ];
-
-      const total = calculateSecureTotal(items, mockCatalog);
-      expect(total).toBe(22300); // (8900 * 2) + (4500 * 1) = 223.00 ISK
-    });
-
-    it('rejects unknown product IDs', () => {
-      const items = [{ product_id: 'NONEXISTENT-PRODUCT', quantity: 1 }];
-
-      expect(() => calculateSecureTotal(items, mockCatalog)).toThrow('Unknown product: NONEXISTENT-PRODUCT');
-    });
-
-    it('rejects invalid quantities', () => {
-      const invalidQuantities = [0, -1, -5];
-
-      invalidQuantities.forEach((quantity) => {
-        const items = [{ product_id: 'HOODIE-BLK-M', quantity }];
-
-        expect(() => calculateSecureTotal(items, mockCatalog)).toThrow(`Invalid quantity: ${quantity}`);
-      });
-    });
-
-    it('handles mixed product types and quantities correctly', () => {
-      const complexOrder = [
-        { product_id: 'HOODIE-BLK-M', quantity: 3 }, // 89.00 * 3 = 267.00
-        { product_id: 'TSHIRT-WHT-L', quantity: 5 }, // 45.00 * 5 = 225.00
-        { product_id: 'JEANS-BLUE-32', quantity: 1 }, // 120.00 * 1 = 120.00
-        // Total: 612.00 ISK = 61200 aurar
-      ];
-
-      const total = calculateSecureTotal(complexOrder, mockCatalog);
-      expect(total).toBe(61200);
-    });
   });
 
-  describe('Settlement Reconciliation Integrity', () => {
-    it('ensures transaction amounts match between gateway and bank', () => {
-      // Mock gateway record
-      const gatewayTransaction = {
-        transaction_id: 'txn-12345',
-        amount: 15000, // 150.00 ISK
-        currency: 'ISK',
-        status: 'completed',
-      };
-
-      // Mock bank settlement record
-      const bankSettlement = {
-        reference: 'txn-12345',
-        amount: 150.0, // Bank reports in ISK (major units)
-        currency: 'ISK',
-      };
-
-      // Convert bank amount to aurar for comparison
-      const bankAmountInAurar = Math.round(bankSettlement.amount * 100);
-
-      expect(gatewayTransaction.amount).toBe(bankAmountInAurar);
-      expect(gatewayTransaction.currency).toBe(bankSettlement.currency);
-    });
-
-    it('detects settlement mismatches that indicate errors', () => {
-      const gatewayAmount = 15000; // 150.00 ISK in aurar
-      const bankAmount = 15001; // 150.01 ISK in aurar (1 aurar difference)
-
-      const tolerance = 0; // Zero tolerance for financial discrepancies
-      const difference = Math.abs(gatewayAmount - bankAmount);
-
-      expect(difference).toBeGreaterThan(tolerance);
-
-      // This should trigger an alert in production
-      if (difference > tolerance) {
-        const errorMessage = `Settlement mismatch: gateway ${gatewayAmount} vs bank ${bankAmount} (diff: ${difference} aurar)`;
-        expect(errorMessage).toContain('Settlement mismatch');
-      }
-    });
+  it('rejects a fractional amount instead of silently rounding it', () => {
+    expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: 8900.5 })).toThrow(
+      /Invalid checkout amount/,
+    );
   });
 
-  describe('Currency Format Validation', () => {
-    it('formats ISK amounts correctly for display', () => {
-      function formatISK(aurar: number): string {
-        const isk = aurar / 100;
-        return new Intl.NumberFormat('is-IS', {
-          style: 'currency',
-          currency: 'ISK',
-          minimumFractionDigits: 2,
-        }).format(isk);
-      }
+  it('rejects zero and negative amounts', () => {
+    expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: 0 })).toThrow(/Invalid checkout amount/);
+    expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: -8900 })).toThrow(/Invalid checkout amount/);
+  });
 
-      // Test that formatting works and preserves precision
-      expect(formatISK(0)).toContain('0');
-      expect(formatISK(100)).toContain('1'); // 1.00 ISK
-      expect(formatISK(1550)).toContain('15'); // 15.50 ISK
-      expect(formatISK(123456)).toMatch(/1.234|1234/); // 1234.56 ISK (with or without thousands separator)
+  it('rejects an amount beyond safe integer precision', () => {
+    expect(() => buildVerifoneCheckoutRequest(env0(), { ...params, amount: Number.MAX_SAFE_INTEGER + 2 })).toThrow(
+      /Invalid checkout amount/,
+    );
+  });
+});
 
-      // Key requirement: currency code appears
-      expect(formatISK(100)).toContain('ISK');
+describe('financial integrity: the invoice reconstructs the charged amount', () => {
+  it('produces a VAT-inclusive total equal to the amount charged, with no quantisation', () => {
+    // 18.050 kr is deliberately not a round hundred: a rounding step that
+    // quantised to the nearest 100 kr (the old roundToIsk) would shift it.
+    const items = [
+      { product_id: 'A', name: 'A', quantity: 1, unit_price: 18_050, total_amount: 18_050, vat_rate: 24 as const },
+      { product_id: 'B', name: 'B', quantity: 2, unit_price: 4_990, total_amount: 9_980, vat_rate: 24 as const },
+    ];
+    const charged = items.reduce((sum, item) => sum + item.total_amount, 0);
 
-      // Key requirement: no precision loss in conversion
-      expect(formatISK(1)).toMatch(/0[.,]01/); // 0.01 ISK (smallest unit)
+    const invoice = computeInvoice({
+      invoiceNumber: 'INV-INTEGRITY-1',
+      issueDate: '2026-08-17',
+      seller: {
+        name: 'Irja',
+        kennitala: '1234567890',
+        vsk_number: '12345',
+        address: 'Laugavegur 1, 101 Reykjavík',
+        email: 'reikningar@example.is',
+      },
+      buyer: { name: 'Jón Jónsson' },
+      items,
+      currency: 'ISK',
     });
+
+    expect(invoice).not.toBeNull();
+    expect(invoice!.summary.total_amount_incl_vat).toBe(charged);
+
+    // VAT breakdown must reconcile to the same total, not merely be present.
+    const rebuilt = invoice!.summary.vat_breakdown.reduce(
+      (sum, entry) => sum + entry.taxable_base + entry.vat_amount,
+      0,
+    );
+    expect(rebuilt).toBe(charged);
   });
 });
