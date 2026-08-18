@@ -18,6 +18,12 @@ PUBLIC_API_URL = "REPLACE_ME_PUBLIC_RETURN_ORIGIN"
 VERIFONE_API_BASE = "https://emea.gsc.verifone.cloud/oidc/checkout-service"
 LANDSBANKINN_API_BASE = "https://api.landsbankinn.is/api/Acquiring/Acquiring/v1"
 LANDSBANKINN_OAUTH_URL = "https://api.landsbankinn.is/oauth2/access_token"
+# ─── Seller identity (legally required on Icelandic invoices) ──
+SELLER_NAME = "REPLACE_ME_SELLER_NAME"
+SELLER_KENNITALA = "REPLACE_ME_SELLER_KENNITALA"
+SELLER_VSK_NUMBER = "REPLACE_ME_SELLER_VSK_NUMBER"
+SELLER_ADDRESS = "REPLACE_ME_SELLER_ADDRESS"
+SELLER_EMAIL = "REPLACE_ME_SELLER_EMAIL"
 
 [[d1_databases]]
 binding = "DB"
@@ -29,7 +35,7 @@ binding = "CACHE"
 id = "REPLACE_ME_PRODUCTION_KV_NAMESPACE_ID"
 
 [[ratelimits]]
-binding = "CHECKOUT_RATE_LIMITER"
+name = "CHECKOUT_RATE_LIMITER"
 namespace_id = "REPLACE_ME_PRODUCTION_RATE_LIMIT_NAMESPACE_ID"
 simple = { limit = 10, period = 60 }
 
