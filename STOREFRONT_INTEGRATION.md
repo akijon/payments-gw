@@ -44,10 +44,16 @@ Body:
     "country_code": "IS",
     "postal_code": "101"
   },
+  "buyer_kennitala": "1234565789",
   "terms_accepted": true,
   "terms_version": "2026-08-17"
 }
 ```
+
+`buyer_kennitala` is optional. If sent, it must be a valid Icelandic kennitala
+(checksum-verified); an invalid one is rejected with `422 invalid_kennitala`
+before any provider call, so the buyer is never charged for an order that
+cannot be invoiced.
 
 `terms_accepted` and `terms_version` are **required**. The Worker rejects the checkout with `400 terms_not_accepted` unless `terms_accepted` is exactly `true`, and with `400 terms_version_mismatch` unless `terms_version` equals the gateway's current `TERMS_VERSION` (defined in `src/lib/terms.ts`). The buyer must accept the terms of sale (including the 14-day withdrawal notice) before the storefront initiates checkout; the Worker persists `terms_accepted_at` + `terms_version` on the order as the consent record.
 
@@ -136,6 +142,10 @@ Map stable API `code` values to customer-friendly text. Keep provider/internal e
 - `checkout_provider_unavailable`: preserve the cart and offer retry; do not claim payment failed.
 - `customer_details_required`, `customer_details_invalid`: keep the buyer on the checkout form and correct the contact/billing fields.
 - `customer_provider_unavailable`: preserve the cart and offer retry; no HPP session was created.
+- `invalid_kennitala`: keep the buyer on the checkout form; ask them to correct `buyer_kennitala`. No provider call was made.
+- `terms_not_accepted`: the buyer must accept the terms of sale before checkout can proceed.
+- `terms_version_mismatch`: the terms page changed since the buyer last accepted; re-show it and require re-acceptance before retrying.
+- `unsupported_media_type`, `request_too_large`: integration bug; not user-recoverable.
 - HTTP `429`: obey `Retry-After` and keep the pay button disabled until then.
 
 ## Architecture decision

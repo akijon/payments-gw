@@ -65,7 +65,7 @@ after. Moving it would have been a pure file rename with no substantive change.
 - **IDs:** UUID v4 primary keys for all entities (`orders`, `payment_events`, `processed_webhooks`, `settlements`).
 - **Amounts:** Non-negative integers in ISK major units (whole krónur). Never aurar.
 - **Concurrency & Isolation:** D1 SQLite transactions (`db.batch()`). Status updates use strict optimistic lock guards (`WHERE id = ? AND status IN (...)`).
-- **Schema Migrations:** Managed sequentially via SQL migration files (`migrations/0001_init.sql` through `0016_customer_billing.sql`).
+- **Schema Migrations:** Managed sequentially via SQL migration files (`migrations/0001_init.sql` through `0016_customer_billing.sql`). Re-verify this reference stays current as new migrations land.
 
 ---
 

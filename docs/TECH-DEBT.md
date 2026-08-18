@@ -84,7 +84,7 @@ registered address are legally required on an Icelandic invoice, so this is a
 compliance failure rather than a degraded response.
 
 These are `[vars]`, not secrets, so their absence from `.dev.vars.example` and
-`scripts/setup-secrets.sh` is correct — those cover the ten Worker secrets only.
+`scripts/setup-secrets.sh` is correct — those cover the nine Worker secrets only.
 The production template is the one place they belong and the one place they are
 missing. Neither gate document currently mentions seller configuration.
 

@@ -56,7 +56,7 @@ Circuit breaker implementation: `src/lib/circuit-breaker.ts` — threshold 5 con
 
 - **Dry-Run Deploy:** `npx wrangler deploy --dry-run` required prior to production release.
 - **Deployment Gates:** Production deployments fail closed unless explicit environment confirmation flags are set (`CONFIRM_PRODUCTION_DEPLOY=1`).
-- **Migration Safeguards:** Database schema changes applied via sequential versioned migrations (`migrations/0001` to `0008`). D1 remote migrations require explicit confirmation (`CONFIRM_PRODUCTION_MIGRATION=1`).
+- **Migration Safeguards:** Database schema changes applied via sequential versioned migrations (`migrations/0001` to `0016`, currently). D1 remote migrations require explicit confirmation (`CONFIRM_PRODUCTION_MIGRATION=1`). Re-verify this reference stays current as new migrations land — `0014_shipping_cost.sql` and `0015_terms_acceptance.sql` are required by the checkout insert (`src/lib/db.ts`) and pricing-integrity check (`src/lib/payment-integrity.ts`); stopping at `0008` breaks checkout immediately.
 
 ---
 

@@ -84,7 +84,19 @@ migrations/
 ├── 0005_order_invariants.sql        # Unique provider-identifier and monetary invariants
 ├── 0006_reconciliation_runs.sql     # Durable reconciliation cursor and run history
 ├── 0007_order_number_index.sql      # Index order_number for reconciliation cron lookups
-└── 0008_payment_method.sql          # payment_method column for PayPal/wallet settlement isolation
+├── 0008_payment_method.sql          # payment_method column for PayPal/wallet settlement isolation
+├── 0009_invoice_tables.sql          # Icelandic invoice (sölureikningur) tables, VAT/kennitala
+├── 0010_credit_notes.sql            # Credit note issuance and linkage to original invoices
+├── 0011_audit_hash.sql              # 7-year audit-hash retention chain
+├── 0012_failure_recovery_states.sql # Failure-recovery state machine columns
+├── 0013_incident_tracking.sql       # Incident tracking tables
+├── 0014_shipping_cost.sql           # orders.shipping_incl_vat, required by assertPricingIntegrity
+├── 0015_terms_acceptance.sql        # orders.terms_accepted_at/terms_version, required by checkout insert
+└── 0016_customer_billing.sql        # Billing identity + verifone_customer_id for HPP 3DS checkouts
+
+Stopping at `0008` breaks checkout and invoicing immediately — `0014` and `0015`
+are required by `src/lib/db.ts` and `src/lib/payment-integrity.ts`. Re-verify
+this list stays current as new migrations land.
 
 test/
 ├── apply-migrations.ts      # Inlined D1 schema for Workers runtime (avoids node:fs issue)
